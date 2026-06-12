@@ -274,6 +274,50 @@ async function fetchWeatherAlerts(apiKey, zip) {
   return res.json();
 }
 
+// ─── GOOGLE CALENDAR REFRESH TOKEN HELPER ────────────────────────────────────
+let _gcalAccessToken = null;
+let _gcalTokenExpiry = 0;
+
+async function getGCalAccessToken(creds) {
+  const { clientId, clientSecret, refreshToken } = creds;
+  if (!clientId || !clientSecret || !refreshToken) throw new Error("Missing Google Calendar credentials");
+  if (_gcalAccessToken && Date.now() < _gcalTokenExpiry - 60000) return _gcalAccessToken;
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error_description || data.error);
+  _gcalAccessToken = data.access_token;
+  _gcalTokenExpiry = Date.now() + (data.expires_in * 1000);
+  return _gcalAccessToken;
+}
+
+async function addGCalEvent(creds, event) {
+  const token = await getGCalAccessToken(creds);
+  const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(event),
+  });
+  return res.json();
+}
+
+async function listGCalEvents(creds) {
+  const token = await getGCalAccessToken(creds);
+  const now = new Date().toISOString();
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${now}&maxResults=20&singleEvents=true&orderBy=startTime`, {
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+  return res.json();
+}
+
 // ─── AI CHAT COMPONENT ────────────────────────────────────────────────────────
 function AIChat({ context, apiKeys }) {
   const [msgs, setMsgs] = useState([]);
@@ -1103,7 +1147,9 @@ function APISettings({ apiKeys, onUpdate }) {
     twilioSid: apiKeys.twilio?.sid||"",
     twilioToken: apiKeys.twilio?.token||"",
     twilioPhone: apiKeys.twilio?.from||"",
-    googleCal: apiKeys.googleCal||"",
+    googleCalClientId: apiKeys.googleCal?.clientId||"",
+    googleCalClientSecret: apiKeys.googleCal?.clientSecret||"",
+    googleCalRefreshToken: apiKeys.googleCal?.refreshToken||"",
     attom: apiKeys.attom||"",
     stripe: apiKeys.stripe||"",
   });
@@ -1113,7 +1159,7 @@ function APISettings({ apiKeys, onUpdate }) {
     onUpdate("api_keys", {
       weather: keys.weather,
       twilio: keys.twilioSid ? { sid:keys.twilioSid, token:keys.twilioToken, from:keys.twilioPhone } : null,
-      googleCal: keys.googleCal,
+      googleCal: keys.googleCalClientId ? { clientId:keys.googleCalClientId, clientSecret:keys.googleCalClientSecret, refreshToken:keys.googleCalRefreshToken } : null,
       attom: keys.attom,
       stripe: keys.stripe,
     });
@@ -1127,6 +1173,12 @@ function APISettings({ apiKeys, onUpdate }) {
         const r = await fetch(`https://api.weatherapi.com/v1/current.json?key=${keys.weather}&q=75023`);
         const d = await r.json();
         setTestResults(p=>({...p,[name]:d.error?"❌ "+d.error.message:"✓ Connected — "+d.location?.name}));
+      } else if(name==="googleCal"&&keys.googleCalClientId) {
+        try {
+          const creds = { clientId:keys.googleCalClientId, clientSecret:keys.googleCalClientSecret, refreshToken:keys.googleCalRefreshToken };
+          const token = await getGCalAccessToken(creds);
+          setTestResults(p=>({...p,[name]:token?"✓ Connected — token refreshed successfully":"❌ Failed to get token"}));
+        } catch(e) { setTestResults(p=>({...p,[name]:"❌ "+e.message})); }
       } else if(name==="claude") {
         const r = await callClaude(null,[{role:"user",content:"Say 'SkyShield connected' and nothing else"}]);
         setTestResults(p=>({...p,[name]:"✓ "+r.trim()}));
@@ -1141,7 +1193,7 @@ function APISettings({ apiKeys, onUpdate }) {
   const services = [
     { id:"weather", name:"WeatherAPI.com", desc:"Storm alert scanning", link:"https://www.weatherapi.com/", fields:[{k:"weather",label:"API Key"}] },
     { id:"twilio", name:"Twilio SMS", desc:"Automated SMS outreach", link:"https://www.twilio.com/", fields:[{k:"twilioSid",label:"Account SID"},{k:"twilioToken",label:"Auth Token",type:"password"},{k:"twilioPhone",label:"From Phone Number"}] },
-    { id:"googleCal", name:"Google Calendar", desc:"Inspection scheduling sync", link:"https://console.cloud.google.com/", fields:[{k:"googleCal",label:"OAuth Bearer Token"}] },
+    { id:"googleCal", name:"Google Calendar", desc:"Inspection scheduling sync", link:"https://console.cloud.google.com/", fields:[{k:"googleCalClientId",label:"Client ID"},{k:"googleCalClientSecret",label:"Client Secret",type:"password"},{k:"googleCalRefreshToken",label:"Refresh Token",type:"password"}] },
     { id:"attom", name:"ATTOM Property Data", desc:"Property data enrichment", link:"https://www.attomdata.com/", fields:[{k:"attom",label:"API Key"}] },
     { id:"stripe", name:"Stripe", desc:"Subscription billing", link:"https://dashboard.stripe.com/", fields:[{k:"stripe",label:"Secret Key"}] },
     { id:"claude", name:"Claude AI (Built-in)", desc:"AI agent & SMS generation", link:"https://console.anthropic.com/", fields:[] },
@@ -1149,6 +1201,7 @@ function APISettings({ apiKeys, onUpdate }) {
 
   const configured = (id) => {
     if(id==="twilio") return !!keys.twilioSid;
+    if(id==="googleCal") return !!keys.googleCalClientId&&!!keys.googleCalRefreshToken;
     if(id==="claude") return true;
     return !!keys[id];
   };
@@ -1197,7 +1250,7 @@ function APISettings({ apiKeys, onUpdate }) {
           {[
             ["1. WeatherAPI","Sign up at weatherapi.com → Get free API key → Paste above → Test → Run Scan in Command Center"],
             ["2. Twilio SMS","Create Twilio account → Get SID + Token + Phone number → Paste above → SMS automation unlocked"],
-            ["3. Google Calendar","Enable Calendar API in Google Cloud → Create OAuth credentials → Get bearer token → Inspections will auto-sync"],
+            ["3. Google Calendar","Google Cloud → Enable Calendar API → Create OAuth Client ID (Web) → OAuth Playground → get refresh token → paste Client ID + Secret + Refresh Token above"],
             ["4. Stripe","Create Stripe account → Dashboard → API Keys → Copy secret key → Billing sync and customer creation enabled"],
           ].map(([title,steps])=>(
             <div key={title} style={{padding:"12px 16px",background:"rgba(255,255,255,0.02)",borderRadius:8,border:`1px solid ${C.border}`}}>
@@ -1375,4 +1428,3 @@ export default function App() {
     </div>
   );
 }
- 
