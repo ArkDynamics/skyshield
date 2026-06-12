@@ -1179,6 +1179,32 @@ function APISettings({ apiKeys, onUpdate }) {
           const token = await getGCalAccessToken(creds);
           setTestResults(p=>({...p,[name]:token?"✓ Connected — token refreshed successfully":"❌ Failed to get token"}));
         } catch(e) { setTestResults(p=>({...p,[name]:"❌ "+e.message})); }
+      } else if(name==="twilio"&&keys.twilioSid) {
+        try {
+          const encoded = btoa(keys.twilioSid+":"+keys.twilioToken);
+          const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${keys.twilioSid}.json`, {
+            headers: { "Authorization": "Basic "+encoded },
+          });
+          const d = await r.json();
+          setTestResults(p=>({...p,[name]:d.friendly_name?"✓ Connected — "+d.friendly_name:"❌ "+(d.message||"Invalid credentials")}));
+        } catch(e) { setTestResults(p=>({...p,[name]:"❌ "+e.message})); }
+      } else if(name==="attom"&&keys.attom) {
+        try {
+          const r = await fetch("https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/basicprofile?postalcode=75023&pagesize=1", {
+            headers: { "apikey": keys.attom, "Accept": "application/json" },
+          });
+          const d = await r.json();
+          setTestResults(p=>({...p,[name]:d.property?"✓ Connected — ATTOM data live":"❌ "+(d.status?.msg||"Invalid API key")}));
+        } catch(e) { setTestResults(p=>({...p,[name]:"❌ "+e.message})); }
+      } else if(name==="stripe"&&keys.stripe) {
+        try {
+          const encoded = btoa(keys.stripe+":");
+          const r = await fetch("https://api.stripe.com/v1/balance", {
+            headers: { "Authorization": "Basic "+encoded },
+          });
+          const d = await r.json();
+          setTestResults(p=>({...p,[name]:d.object==="balance"?"✓ Connected — Stripe balance retrieved":"❌ "+(d.error?.message||"Invalid key")}));
+        } catch(e) { setTestResults(p=>({...p,[name]:"❌ "+e.message})); }
       } else if(name==="claude") {
         const r = await callClaude(null,[{role:"user",content:"Say 'SkyShield connected' and nothing else"}]);
         setTestResults(p=>({...p,[name]:"✓ "+r.trim()}));
