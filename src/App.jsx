@@ -1151,7 +1151,8 @@ function APISettings({ apiKeys, onUpdate }) {
     googleCalClientSecret: apiKeys.googleCal?.clientSecret||"",
     googleCalRefreshToken: apiKeys.googleCal?.refreshToken||"",
     attom: apiKeys.attom||"",
-    stripe: apiKeys.stripe||"",
+    stripePublishable: apiKeys.stripe?.publishable||"",
+    stripeSecret: apiKeys.stripe?.secret||"",
   });
   const [testResults, setTestResults] = useState({});
 
@@ -1161,7 +1162,7 @@ function APISettings({ apiKeys, onUpdate }) {
       twilio: keys.twilioSid ? { sid:keys.twilioSid, token:keys.twilioToken, from:keys.twilioPhone } : null,
       googleCal: keys.googleCalClientId ? { clientId:keys.googleCalClientId, clientSecret:keys.googleCalClientSecret, refreshToken:keys.googleCalRefreshToken } : null,
       attom: keys.attom,
-      stripe: keys.stripe,
+      stripe: keys.stripeSecret ? { publishable:keys.stripePublishable, secret:keys.stripeSecret } : null,
     });
     alert("API keys saved!");
   }
@@ -1198,7 +1199,7 @@ function APISettings({ apiKeys, onUpdate }) {
         } catch(e) { setTestResults(p=>({...p,[name]:"❌ "+e.message})); }
       } else if(name==="stripe"&&keys.stripe) {
         try {
-          const encoded = btoa(keys.stripe+":");
+          const encoded = btoa(keys.stripeSecret+":");
           const r = await fetch("https://api.stripe.com/v1/balance", {
             headers: { "Authorization": "Basic "+encoded },
           });
@@ -1221,13 +1222,14 @@ function APISettings({ apiKeys, onUpdate }) {
     { id:"twilio", name:"Twilio SMS", desc:"Automated SMS outreach", link:"https://www.twilio.com/", fields:[{k:"twilioSid",label:"Account SID"},{k:"twilioToken",label:"Auth Token",type:"password"},{k:"twilioPhone",label:"From Phone Number"}] },
     { id:"googleCal", name:"Google Calendar", desc:"Inspection scheduling sync", link:"https://console.cloud.google.com/", fields:[{k:"googleCalClientId",label:"Client ID"},{k:"googleCalClientSecret",label:"Client Secret",type:"password"},{k:"googleCalRefreshToken",label:"Refresh Token",type:"password"}] },
     { id:"attom", name:"ATTOM Property Data", desc:"Property data enrichment", link:"https://www.attomdata.com/", fields:[{k:"attom",label:"API Key"}] },
-    { id:"stripe", name:"Stripe", desc:"Subscription billing", link:"https://dashboard.stripe.com/", fields:[{k:"stripe",label:"Secret Key"}] },
+    { id:"stripe", name:"Stripe", desc:"Subscription billing", link:"https://dashboard.stripe.com/", fields:[{k:"stripePublishable",label:"Publishable Key"},{k:"stripeSecret",label:"Secret Key",type:"password"}] },
     { id:"claude", name:"Claude AI (Built-in)", desc:"AI agent & SMS generation", link:"https://console.anthropic.com/", fields:[] },
   ];
 
   const configured = (id) => {
     if(id==="twilio") return !!keys.twilioSid;
     if(id==="googleCal") return !!keys.googleCalClientId&&!!keys.googleCalRefreshToken;
+    if(id==="stripe") return !!keys.stripeSecret;
     if(id==="claude") return true;
     return !!keys[id];
   };
