@@ -1197,7 +1197,7 @@ function APISettings({ apiKeys, onUpdate }) {
           const d = await r.json();
           setTestResults(p=>({...p,[name]:d.property?"✓ Connected — ATTOM data live":"❌ "+(d.status?.msg||"Invalid API key")}));
         } catch(e) { setTestResults(p=>({...p,[name]:"❌ "+e.message})); }
-      } else if(name==="stripe"&&keys.stripe) {
+      } else if(name==="stripe"&&keys.stripeSecret) {
         try {
           const encoded = btoa(keys.stripeSecret+":");
           const r = await fetch("https://api.stripe.com/v1/balance", {
