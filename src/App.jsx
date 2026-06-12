@@ -1199,9 +1199,8 @@ function APISettings({ apiKeys, onUpdate }) {
         } catch(e) { setTestResults(p=>({...p,[name]:"❌ "+e.message})); }
       } else if(name==="stripe"&&keys.stripeSecret) {
         try {
-          const encoded = btoa(keys.stripeSecret+":");
           const r = await fetch("https://api.stripe.com/v1/balance", {
-            headers: { "Authorization": "Basic "+encoded },
+            headers: { "Authorization": "Bearer "+keys.stripeSecret },
           });
           const d = await r.json();
           setTestResults(p=>({...p,[name]:d.object==="balance"?"✓ Connected — Stripe balance retrieved":"❌ "+(d.error?.message||"Invalid key")}));
@@ -1222,7 +1221,7 @@ function APISettings({ apiKeys, onUpdate }) {
     { id:"twilio", name:"Twilio SMS", desc:"Automated SMS outreach", link:"https://www.twilio.com/", fields:[{k:"twilioSid",label:"Account SID"},{k:"twilioToken",label:"Auth Token",type:"password"},{k:"twilioPhone",label:"From Phone Number"}] },
     { id:"googleCal", name:"Google Calendar", desc:"Inspection scheduling sync", link:"https://console.cloud.google.com/", fields:[{k:"googleCalClientId",label:"Client ID"},{k:"googleCalClientSecret",label:"Client Secret",type:"password"},{k:"googleCalRefreshToken",label:"Refresh Token",type:"password"}] },
     { id:"attom", name:"ATTOM Property Data", desc:"Property data enrichment", link:"https://www.attomdata.com/", fields:[{k:"attom",label:"API Key"}] },
-    { id:"stripe", name:"Stripe", desc:"Subscription billing", link:"https://dashboard.stripe.com/", fields:[{k:"stripePublishable",label:"Publishable Key"},{k:"stripeSecret",label:"Secret Key",type:"password"}] },
+    { id:"stripe", name:"Stripe", desc:"Subscription billing", link:"https://dashboard.stripe.com/", fields:[{k:"stripePublishable",label:"Publishable Key"},{k:"stripeSecret",label:"Restricted Key",type:"password"}] },
     { id:"claude", name:"Claude AI (Built-in)", desc:"AI agent & SMS generation", link:"https://console.anthropic.com/", fields:[] },
   ];
 
