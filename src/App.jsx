@@ -2215,8 +2215,7 @@ export default function App(){
       }
 
       try{
-        const stored=await window.storage.get("skyshield_refresh_token");
-        const refreshToken=stored?.value;
+        const refreshToken=localStorage.getItem("skyshield_refresh_token");
         if(refreshToken){
           const sessionData=await supabaseRefreshSession(refreshToken);
           if(sessionData?.access_token){
@@ -2322,7 +2321,7 @@ export default function App(){
   },[activities,scanSettings,apiKeys,dataLoaded]);
 
   // Determine role from email: configure your admin email(s) here
-  const ADMIN_EMAILS=["noah.arkdynamics@gmail.com"];
+  const ADMIN_EMAILS=["noah.arkdynamics@gmail.com.com"];
 
   function handleLoginSuccess(sessionData, isRestoring){
     setCurrentAccessToken(sessionData.access_token);
@@ -2330,7 +2329,7 @@ export default function App(){
     // Stored via the artifact's persistent key-value storage (not
     // localStorage/sessionStorage, which aren't supported here).
     if(sessionData.refresh_token){
-      window.storage.set("skyshield_refresh_token", sessionData.refresh_token).catch(()=>{});
+      try{ localStorage.setItem("skyshield_refresh_token", sessionData.refresh_token); }catch(e){}
     }
     const email=sessionData.user?.email||"";
     const isAdmin=ADMIN_EMAILS.includes(email.toLowerCase());
@@ -2378,7 +2377,7 @@ export default function App(){
 
   function handleSignOut(){
     setCurrentAccessToken(null);
-    window.storage.delete("skyshield_refresh_token").catch(()=>{});
+    try{ localStorage.removeItem("skyshield_refresh_token"); }catch(e){}
     setAuth({loggedIn:false,role:null,roofer:null,session:null});
     setSelectedRoofer(null);
     setActiveSection("Command Center");
