@@ -2050,6 +2050,171 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
 }
 
 // ─── SUBSCRIPTIONS & BILLING ──────────────────────────────────────────────────
+// ─── PRICING EDITOR ──────────────────────────────────────────────────────────
+function PricingEditor({pricing,setPricing,roofers}){
+  const[editingPlan,setEditingPlan]=useState(null); // plan name being edited
+  const[showAdd,setShowAdd]=useState(false);
+  const[newPlan,setNewPlan]=useState({name:"",price:"",features:[""]});
+  const planColors=[C.blue,C.orange,C.purple,C.green,C.yellow];
+  const planKeys=Object.keys(pricing);
+
+  function colorFor(plan){
+    const i=planKeys.indexOf(plan);
+    return planColors[i%planColors.length];
+  }
+
+  function saveEdit(plan,data){
+    setPricing(p=>({...p,[plan]:data}));
+    setEditingPlan(null);
+  }
+
+  function deletePlan(plan){
+    if(roofers.some(r=>r.plan===plan)){
+      alert(`Cannot delete "${plan}" — ${roofers.filter(r=>r.plan===plan).length} client(s) are on this plan. Move them first.`);
+      return;
+    }
+    if(!window.confirm(`Delete the "${plan}" plan?`)) return;
+    setPricing(p=>{const n={...p};delete n[plan];return n;});
+  }
+
+  function addPlan(){
+    const name=newPlan.name.trim();
+    if(!name){ alert("Plan name required."); return; }
+    if(pricing[name]){ alert("A plan with that name already exists."); return; }
+    const price=Number(newPlan.price);
+    if(!price||price<0){ alert("Enter a valid price."); return; }
+    const features=newPlan.features.map(f=>f.trim()).filter(Boolean);
+    setPricing(p=>({...p,[name]:{price,features}}));
+    setNewPlan({name:"",price:"",features:[""]});
+    setShowAdd(false);
+  }
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      <div style={{...flex(0,"center","flex-end")}}>
+        <Btn variant="primary" onClick={()=>setShowAdd(true)}>+ Add Plan</Btn>
+      </div>
+
+      {/* Add plan modal */}
+      {showAdd&&<Modal title="Add New Plan" onClose={()=>setShowAdd(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <Input label="Plan Name" value={newPlan.name} onChange={v=>setNewPlan(p=>({...p,name:v}))} placeholder="e.g. Enterprise"/>
+          <Input label="Monthly Price ($)" value={newPlan.price} onChange={v=>setNewPlan(p=>({...p,price:v}))} type="number" placeholder="997"/>
+          <div>
+            <div style={{fontSize:12,fontWeight:600,color:C.textSub,marginBottom:8}}>Features</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {newPlan.features.map((f,i)=>(
+                <div key={i} style={flex(8)}>
+                  <input value={f}
+                    onChange={e=>setNewPlan(p=>({...p,features:p.features.map((x,j)=>j===i?e.target.value:x)}))}
+                    placeholder={`Feature ${i+1}`}
+                    style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 10px",color:C.text,fontSize:13}}/>
+                  {newPlan.features.length>1&&<Btn small variant="danger" onClick={()=>setNewPlan(p=>({...p,features:p.features.filter((_,j)=>j!==i)}))}>✕</Btn>}
+                </div>
+              ))}
+              <Btn small onClick={()=>setNewPlan(p=>({...p,features:[...p.features,""]}))}>+ Add Feature</Btn>
+            </div>
+          </div>
+          <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
+            <Btn onClick={()=>setShowAdd(false)}>Cancel</Btn>
+            <Btn variant="primary" onClick={addPlan}>Add Plan</Btn>
+          </div>
+        </div>
+      </Modal>}
+
+      {/* Edit plan modal */}
+      {editingPlan&&<EditPlanModal
+        plan={editingPlan}
+        data={pricing[editingPlan]}
+        color={colorFor(editingPlan)}
+        onSave={data=>saveEdit(editingPlan,data)}
+        onClose={()=>setEditingPlan(null)}
+      />}
+
+      {/* Plan cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:16}}>
+        {planKeys.map((plan,pi)=>{
+          const data=pricing[plan];
+          const color=planColors[pi%planColors.length];
+          const activeCount=roofers.filter(r=>r.plan===plan&&r.status==="active").length;
+          return(
+            <div key={plan} style={card({position:"relative",border:`1px solid ${color}33`})}>
+              {/* Actions */}
+              <div style={{position:"absolute",top:10,right:10,display:"flex",gap:5}}>
+                <Btn small variant="default" onClick={()=>setEditingPlan(plan)}>✏ Edit</Btn>
+                <Btn small variant="danger" onClick={()=>deletePlan(plan)}>🗑</Btn>
+              </div>
+              <div style={{...T.head(16,700),color,marginBottom:6,paddingRight:100}}>{plan}</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:3,marginBottom:14}}>
+                <span style={{fontSize:13,color:C.textMuted}}>$</span>
+                <span style={{fontSize:34,fontWeight:700,color,lineHeight:1}}>{data.price.toLocaleString()}</span>
+                <span style={{fontSize:12,color:C.textMuted}}>/mo</span>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:14}}>
+                {data.features.map((f,i)=>(
+                  <div key={i} style={flex(8)}>
+                    <span style={{color,fontSize:12,flexShrink:0}}>✓</span>
+                    <span style={{fontSize:12,color:C.textSub}}>{f}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{padding:"7px 11px",background:`${color}12`,borderRadius:6,
+                fontSize:12,color:C.textMuted,border:`1px solid ${color}22`}}>
+                {activeCount} active · ${(data.price*activeCount).toLocaleString()}/mo revenue
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function EditPlanModal({plan,data,color,onSave,onClose}){
+  const[price,setPrice]=useState(String(data.price));
+  const[features,setFeatures]=useState([...data.features]);
+
+  function save(){
+    const p=Number(price);
+    if(!p||p<0){ alert("Enter a valid price."); return; }
+    const f=features.map(x=>x.trim()).filter(Boolean);
+    if(!f.length){ alert("Add at least one feature."); return; }
+    onSave({price:p,features:f});
+  }
+
+  return(
+    <Modal title={`Edit Plan — ${plan}`} onClose={onClose}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:6}}>
+          <span style={{fontSize:13,color:C.textMuted}}>$</span>
+          <input type="number" value={price} onChange={e=>setPrice(e.target.value)}
+            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+              padding:"8px 12px",color,fontSize:24,fontWeight:700,width:120,outline:"none"}}/>
+          <span style={{fontSize:13,color:C.textMuted}}>/mo</span>
+        </div>
+        <div>
+          <div style={{fontSize:12,fontWeight:600,color:C.textSub,marginBottom:8}}>Features</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {features.map((f,i)=>(
+              <div key={i} style={flex(8)}>
+                <input value={f} onChange={e=>setFeatures(fs=>fs.map((x,j)=>j===i?e.target.value:x))}
+                  style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,
+                    borderRadius:6,padding:"6px 10px",color:C.text,fontSize:13}}/>
+                {features.length>1&&<Btn small variant="danger" onClick={()=>setFeatures(fs=>fs.filter((_,j)=>j!==i))}>✕</Btn>}
+              </div>
+            ))}
+            <Btn small onClick={()=>setFeatures(fs=>[...fs,""])}>+ Add Feature</Btn>
+          </div>
+        </div>
+        <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
+          <Btn onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" onClick={save}>Save Changes</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function Subscriptions({roofers,onUpdate}){
   const[tab,setTab]=useState("Clients");
   const[showInvite,setShowInvite]=useState(false);
@@ -2081,7 +2246,7 @@ function Subscriptions({roofers,onUpdate}){
           <TD bold>{r.name}</TD>
           <TD>{r.owner}</TD>
           <TD dim>{r.email}</TD>
-          <TD><select value={r.plan} onChange={e=>onUpdate("update_roofer_plan",{rooferId:r.id,plan:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 8px",color:C.text,fontSize:12}}>{["Starter","Pro","Elite"].map(p=><option key={p}>{p}</option>)}</select></TD>
+          <TD><select value={r.plan} onChange={e=>onUpdate("update_roofer_plan",{rooferId:r.id,plan:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 8px",color:C.text,fontSize:12}}>{Object.keys(pricing).map(p=><option key={p}>{p}</option>)}</select></TD>
           <TD><StatusBadge status={r.status}/></TD>
           <TD style={{color:C.green,fontWeight:600}}>{r.status==="active"?`$${(pricing[r.plan]?.price||0).toLocaleString()}/mo`:"—"}</TD>
           <TD>{r.status!=="active"?<Btn small variant="success" onClick={()=>onUpdate("update_roofer_status",{rooferId:r.id,status:"active"})}>Activate</Btn>:<Btn small variant="danger" onClick={()=>onUpdate("update_roofer_status",{rooferId:r.id,status:"cancelled"})}>Cancel</Btn>}</TD>
@@ -2089,23 +2254,7 @@ function Subscriptions({roofers,onUpdate}){
       </TableWrap>
     </div>}
 
-    {tab==="Pricing"&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:16}}>
-      {Object.entries(pricing).map(([plan,data])=><div key={plan} style={{...card({position:"relative"}),border:plan==="Pro"?`1px solid ${C.orange}44`:undefined}}>
-        {plan==="Pro"&&<div style={{position:"absolute",top:-11,left:"50%",transform:"translateX(-50%)",background:C.orange,color:"#fff",fontSize:9,fontWeight:700,padding:"2px 10px",borderRadius:10,textTransform:"uppercase",letterSpacing:"0.06em"}}>Most Popular</div>}
-        <div style={{...T.head(16,700),marginBottom:8}}>{plan}</div>
-        <div style={{display:"flex",alignItems:"baseline",gap:3,marginBottom:16}}>
-          <span style={{fontSize:13,color:C.textMuted}}>$</span>
-          <input type="number" value={data.price} onChange={e=>setPricing(p=>({...p,[plan]:{...p[plan],price:Number(e.target.value)}}))} style={{background:"none",border:"none",color:PLAN_COLORS[plan],fontSize:34,fontWeight:700,width:95,outline:"none"}}/>
-          <span style={{fontSize:12,color:C.textMuted}}>/mo</span>
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
-          {data.features.map(f=><div key={f} style={flex(8)}><span style={{color:PLAN_COLORS[plan],fontSize:12}}>✓</span><span style={{fontSize:13,color:C.textSub}}>{f}</span></div>)}
-        </div>
-        <div style={{padding:"8px 12px",background:C.orangeDim,borderRadius:6,fontSize:12,color:C.textMuted,border:`1px solid ${C.orange}22`}}>
-          {roofers.filter(r=>r.plan===plan&&r.status==="active").length} active → ${(data.price*roofers.filter(r=>r.plan===plan&&r.status==="active").length).toLocaleString()}/mo
-        </div>
-      </div>)}
-    </div>}
+    {tab==="Pricing"&&<PricingEditor pricing={pricing} setPricing={setPricing} roofers={roofers} onUpdate={onUpdate}/>}
 
     {tab==="Billing"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:12}}>
