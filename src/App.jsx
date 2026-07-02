@@ -2321,13 +2321,10 @@ export default function App(){
   },[activities,scanSettings,apiKeys,dataLoaded]);
 
   // Determine role from email: configure your admin email(s) here
-  const ADMIN_EMAILS=["noah.arkdynamics@gmail.com.com"];
+  const ADMIN_EMAILS=["noah.arkdynamics@gmail.com"];
 
   function handleLoginSuccess(sessionData, isRestoring){
     setCurrentAccessToken(sessionData.access_token);
-    // Persist the refresh token so the session survives a page reload.
-    // Stored via the artifact's persistent key-value storage (not
-    // localStorage/sessionStorage, which aren't supported here).
     if(sessionData.refresh_token){
       try{ localStorage.setItem("skyshield_refresh_token", sessionData.refresh_token); }catch(e){}
     }
