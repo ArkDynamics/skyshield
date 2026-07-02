@@ -1,15 +1,195 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
+// ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
+const SUPABASE_URL = "https://zwadqhocdooikfokontb.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp3YWRxaG9jZG9vaWtmb2tvbnRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzODE3OTUsImV4cCI6MjA5Njk1Nzc5NX0.WRN57iGXTGG3LgGfU_EjvvNh0fTuL-Kzp9IhL-t63kw";
+
+async function supabaseAuth(endpoint, body) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || data.error || "Authentication failed");
+  return data;
+}
+
+async function supabaseSignUp(email, password) {
+  return supabaseAuth("signup", { email, password });
+}
+async function supabaseSignIn(email, password) {
+  return supabaseAuth("token?grant_type=password", { email, password });
+}
+async function supabaseRefreshSession(refreshToken) {
+  return supabaseAuth("token?grant_type=refresh_token", { refresh_token: refreshToken });
+}
+async function supabaseResetPassword(email) {
+  return supabaseAuth("recover", { email });
+}
+async function supabaseUpdatePassword(accessToken, newPassword) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${accessToken}` },
+    body: JSON.stringify({ password: newPassword }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || "Failed to update password");
+  return data;
+}
+async function supabaseGetUser(accessToken) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+async function supabaseQuery(table, accessToken, params="") {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${params}`, {
+    headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${accessToken||SUPABASE_ANON_KEY}` },
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+async function supabaseUpsert(table, accessToken, row) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${accessToken}`, "Prefer": "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(row),
+  });
+  return res.json();
+}
+async function supabaseDelete(table, accessToken, idColumn, idValue) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${idColumn}=eq.${encodeURIComponent(idValue)}`, {
+    method: "DELETE",
+    headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${accessToken}` },
+  });
+  return res.ok;
+}
+
+// Holds the current session's access token in module scope so data-layer
+// functions (save/load/delete helpers below) don't need the token threaded
+// through every single call site. Set once on login, cleared on sign out.
+let _currentAccessToken = null;
+function setCurrentAccessToken(token){ _currentAccessToken = token; }
+function getCurrentAccessToken(){ return _currentAccessToken || SUPABASE_ANON_KEY; }
+
+// ─── DATA LAYER: APP STATE <-> SUPABASE ROW SHAPE CONVERSION ─────────────────
+// The app's in-memory objects use camelCase and nested structures that mirror
+// React state conveniently. Supabase rows use snake_case flat columns (with
+// JSONB for nested bits). These functions translate both directions so the
+// rest of the app never has to think about the database's column names.
+
+function rooferToRow(r){
+  return {
+    id:r.id, name:r.name, owner:r.owner, email:r.email, phone:r.phone,
+    plan:r.plan, status:r.status, territories:r.territories||[],
+    revenue:r.revenue||0, leads:r.leads||0, booked:r.booked||0,
+    pin:r.pin||null, twilio_from:r.twilioFrom||null,
+    inspectors:r.inspectors||[], inspections:r.inspections||[],
+    revenue_log:r.revenueLog||[], comm_settings:r.commSettings||DEFAULT_COMM,
+    schedule_settings:r.scheduleSettings||DEFAULT_SCHEDULE, notifications:r.notifications||[],
+    updated_at:new Date().toISOString(),
+  };
+}
+function rowToRoofer(row){
+  return {
+    id:row.id, name:row.name, owner:row.owner, email:row.email, phone:row.phone,
+    plan:row.plan, status:row.status, territories:row.territories||[],
+    revenue:Number(row.revenue)||0, leads:row.leads||0, booked:row.booked||0,
+    pin:row.pin||"", twilioFrom:row.twilio_from||"",
+    inspectors:row.inspectors||[], inspections:row.inspections||[],
+    revenueLog:row.revenue_log||[], commSettings:row.comm_settings||{...DEFAULT_COMM},
+    scheduleSettings:row.schedule_settings||{...DEFAULT_SCHEDULE}, notifications:row.notifications||[],
+  };
+}
+function leadToRow(l){
+  return {
+    id:l.id, homeowner:l.homeowner, phone:l.phone, zip:l.zip, roofer_id:l.rooferId,
+    storm_type:l.stormType, status:l.status, notes:l.notes||"",
+    contacted_at:l.contactedAt, followup_sent:!!l.followupSent,
+    adult_confirmed:l.adultConfirmed||"unconfirmed", conversations:l.conversations||[],
+    updated_at:new Date().toISOString(),
+  };
+}
+function rowToLead(row){
+  return {
+    id:row.id, homeowner:row.homeowner, phone:row.phone, zip:row.zip, rooferId:row.roofer_id,
+    stormType:row.storm_type, status:row.status, notes:row.notes||"",
+    contactedAt:row.contacted_at, followupSent:!!row.followup_sent,
+    adultConfirmed:row.adult_confirmed||"unconfirmed", conversations:row.conversations||[],
+  };
+}
+function stormToRow(s){
+  return { id:s.id, type:s.type, location:s.location, zip:s.zip, severity:s.severity, date:s.date, processed:!!s.processed, lat:s.lat, lng:s.lng };
+}
+function rowToStorm(row){
+  return { id:row.id, type:row.type, location:row.location, zip:row.zip, severity:row.severity, date:row.date, processed:!!row.processed, lat:row.lat, lng:row.lng };
+}
+
+// ─── DATA LAYER: LOAD / SAVE / DELETE ────────────────────────────────────────
+// Thin wrappers that fetch/persist each collection. Called once on app load
+// (loadAllData) and after every mutating action (the various save*/delete*
+// functions), keeping Supabase as the source of truth while local React
+// state stays as a fast in-memory mirror for snappy UI updates.
+
+async function loadAllData(){
+  const token=getCurrentAccessToken();
+  const [rooferRows, leadRows, stormRows, appStateRows] = await Promise.all([
+    supabaseQuery("roofers", token, "?select=*"),
+    supabaseQuery("leads", token, "?select=*"),
+    supabaseQuery("storms", token, "?select=*"),
+    supabaseQuery("app_state", token, "?id=eq.singleton&select=*"),
+  ]);
+  const appState = Array.isArray(appStateRows) && appStateRows[0] ? appStateRows[0] : null;
+  return {
+    roofers: Array.isArray(rooferRows) ? rooferRows.map(rowToRoofer) : [],
+    leads: Array.isArray(leadRows) ? leadRows.map(rowToLead) : [],
+    storms: Array.isArray(stormRows) ? stormRows.map(rowToStorm) : [],
+    activities: appState?.activities || [],
+    scanSettings: appState?.scan_settings || { interval:"daily", startTime:"07:00", lastScan:null },
+    apiKeys: appState?.api_keys || {},
+    lastSeenVersion: appState?.last_seen_version || "0.0.0",
+  };
+}
+
+async function saveRoofer(roofer){
+  try{ await supabaseUpsert("roofers", getCurrentAccessToken(), rooferToRow(roofer)); }
+  catch(e){ console.error("saveRoofer failed:", e); }
+}
+async function deleteRooferRow(id){
+  try{ await supabaseDelete("roofers", getCurrentAccessToken(), "id", id); }
+  catch(e){ console.error("deleteRooferRow failed:", e); }
+}
+async function saveLead(lead){
+  try{ await supabaseUpsert("leads", getCurrentAccessToken(), leadToRow(lead)); }
+  catch(e){ console.error("saveLead failed:", e); }
+}
+async function deleteLeadRow(id){
+  try{ await supabaseDelete("leads", getCurrentAccessToken(), "id", id); }
+  catch(e){ console.error("deleteLeadRow failed:", e); }
+}
+async function saveStorm(storm){
+  try{ await supabaseUpsert("storms", getCurrentAccessToken(), stormToRow(storm)); }
+  catch(e){ console.error("saveStorm failed:", e); }
+}
+async function saveAppState(partial){
+  try{
+    const row={ id:"singleton", updated_at:new Date().toISOString(), ...partial };
+    await supabaseUpsert("app_state", getCurrentAccessToken(), row);
+  }catch(e){ console.error("saveAppState failed:", e); }
+}
+
 // ─── GLOBAL STYLES ────────────────────────────────────────────────────────────
 const FontLoader = () => (
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { font-size: 14px; }
-    body { background: #0a0d14; color: #cbd5e1; font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+    body { background: #030e18; color: #e2f8f8; font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
     ::-webkit-scrollbar { width: 5px; height: 5px; }
-    ::-webkit-scrollbar-track { background: #0f1218; }
-    ::-webkit-scrollbar-thumb { background: #e07b2a; border-radius: 3px; }
+    ::-webkit-scrollbar-track { background: #040f1b; }
+    ::-webkit-scrollbar-thumb { background: #2dd4bf; border-radius: 3px; }
     input, select, textarea, button { font-family: 'Inter', sans-serif; }
     table { border-collapse: collapse; }
     a { text-decoration: none; }
@@ -18,35 +198,35 @@ const FontLoader = () => (
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
 const C = {
-  // Backgrounds
-  bg:       "#0a0d14",
-  surface:  "#0f1218",
-  card:     "#141821",
-  cardHov:  "#1a1f2e",
-  border:   "#1e2535",
-  borderAct:"#e07b2a",
+  // Backgrounds — Deep Ocean Aurora
+  bg:       "#030e18",
+  surface:  "#040f1b",
+  card:     "#071828",
+  cardHov:  "#0a1f32",
+  border:   "rgba(80,200,220,0.09)",
+  borderAct:"rgba(45,212,191,0.25)",
 
-  // Brand
-  orange:   "#e07b2a",
-  orangeLt: "#f59b4f",
-  orangeDim:"rgba(224,123,42,0.12)",
+  // Brand — teal replaces orange throughout
+  orange:   "#2dd4bf",
+  orangeLt: "#5eead4",
+  orangeDim:"rgba(45,212,191,0.12)",
 
   // Semantic
-  green:    "#2ecc71",
-  greenDim: "rgba(46,204,113,0.12)",
-  red:      "#e74c3c",
-  redDim:   "rgba(231,76,60,0.12)",
-  blue:     "#3498db",
-  blueDim:  "rgba(52,152,219,0.12)",
-  yellow:   "#f1c40f",
-  yellowDim:"rgba(241,196,15,0.12)",
-  purple:   "#9b59b6",
-  purpleDim:"rgba(155,89,182,0.12)",
+  green:    "#34d399",
+  greenDim: "rgba(52,211,153,0.12)",
+  red:      "#f87171",
+  redDim:   "rgba(248,113,113,0.12)",
+  blue:     "#38bdf8",
+  blueDim:  "rgba(56,189,248,0.12)",
+  yellow:   "#fbbf24",
+  yellowDim:"rgba(251,191,36,0.12)",
+  purple:   "#818cf8",
+  purpleDim:"rgba(129,140,248,0.12)",
 
   // Text
-  text:     "#e2e8f0",
-  textSub:  "#94a3b8",
-  textMuted:"#4a5568",
+  text:     "#e2f8f8",
+  textSub:  "#5a9ab0",
+  textMuted:"rgba(100,200,220,0.28)",
 };
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -54,12 +234,46 @@ const DEFAULT_COMM = {
   activeHoursStart:"08:00", activeHoursEnd:"18:00",
   activeDays:["Mon","Tue","Wed","Thu","Fri"],
   followupDays:2, coldDays:5,
+  aiAutoReply:false, // when true, incoming lead SMS replies get a Claude-generated response
+  requireAdultPresent:true, // require AI to confirm an adult (18+) will be present before booking
   templates:{
     initial:"Hi {{name}}, we noticed your area ({{zip}}) was recently hit by a {{storm}} storm. {{company}} offers FREE roof inspections — reply YES to schedule yours today!",
     followup:"Hi {{name}}, just following up on our inspection offer for your home in {{zip}}. We have openings this week — interested?",
     booking:"Hi {{name}}, your roof inspection is confirmed for {{date}} at {{time}} with {{inspector}}. Reply STOP to cancel. — {{company}}",
+    adultCheck:"Great! One quick thing before we lock in a time — will someone 18 or older be home during the inspection? Just need a quick yes to confirm.",
   }
 };
+
+// ─── VERSION & CHANGELOG ─────────────────────────────────────────────────────
+// Bump APP_VERSION with every deploy. Add an entry to CHANGELOG describing
+// what changed — this is what users will see in the "What's New" modal.
+// Format: { version:"x.x.x", date:"Month DD, YYYY", changes:["...","..."] }
+const APP_VERSION = "1.1.0";
+const CHANGELOG = [
+  {
+    version:"1.1.0",
+    date:"July 2, 2025",
+    changes:[
+      "New Deep Ocean Aurora theme — updated colors, backgrounds, and nav styling throughout the app",
+      "In-app update notifications — you'll now see what changed after every new version is deployed",
+      "Session persistence — you stay logged in across page refreshes without needing to re-enter your password",
+      "Full Supabase data persistence — roofers, leads, storms, and API keys now survive code deploys",
+      "AI adult-presence verification gate — the AI auto-reply system now confirms an adult will be present before booking any inspection",
+    ],
+  },
+  {
+    version:"1.0.0",
+    date:"June 30, 2025",
+    changes:[
+      "Initial release of SkyShield Pro",
+      "Admin Command Center with roofer management, storm map, and lead pipeline",
+      "Per-roofer Twilio SMS numbers with round-robin lead distribution",
+      "Native scheduling engine with real availability, conflict detection, and Google Calendar links",
+      "Roofer dashboard with notification bell, calendar, and conversation view",
+      "Stripe billing integration and revenue tracking",
+    ],
+  },
+];
 
 const PLAN_PRICES   = { Starter:297, Pro:497, Elite:997 };
 const PLAN_COLORS   = { Starter:C.blue, Pro:C.orange, Elite:C.purple, Trial:C.yellow };
@@ -71,37 +285,21 @@ const SCAN_INTERVALS= [
 const INSPECTION_STATUSES   = ["scheduled","completed","no-show","converted","lost"];
 const INS_STATUS_COLORS     = {scheduled:C.blue,completed:C.green,"no-show":C.yellow,converted:C.purple,lost:C.red};
 
-// ─── DEMO DATA ────────────────────────────────────────────────────────────────
-const INIT_ROOFERS=[
-  {id:"r1",name:"Apex Roofing Co",owner:"Marcus Holt",email:"marcus@apexroofing.com",phone:"972-555-0101",plan:"Pro",status:"active",
-   territories:["75023","75024","75025"],revenue:57000,leads:42,booked:18,commSettings:{...DEFAULT_COMM},pin:"1234",
-   inspectors:[{id:"i1",name:"Jake Torres",phone:"972-555-0201",zones:["75023","75024"]},{id:"i2",name:"Priya Shah",phone:"972-555-0202",zones:["75025"]}],
-   inspections:[{id:"ins1",client:"Robert Chen",address:"1204 Oak Ln, Plano TX 75023",date:"2025-06-15",time:"9:00 AM",inspector:"Jake Torres",status:"scheduled"},{id:"ins2",client:"Linda Park",address:"876 Elm St, Plano TX 75024",date:"2025-06-16",time:"11:00 AM",inspector:"Priya Shah",status:"completed"}],
-   revenueLog:[{id:"rv1",leadId:"l1",homeowner:"Robert Chen",amount:8500,date:"2025-06-15",note:"Full replacement"}]},
-  {id:"r2",name:"Summit Storm Pros",owner:"Diane Reeves",email:"diane@summitstorm.com",phone:"972-555-0102",plan:"Starter",status:"active",
-   territories:["75034","75035"],revenue:24000,leads:19,booked:8,commSettings:{...DEFAULT_COMM},pin:"5678",
-   inspectors:[{id:"i3",name:"Carl Watts",phone:"972-555-0203",zones:["75034","75035"]}],
-   inspections:[{id:"ins3",client:"Amy Johnson",address:"543 Maple Ave, Frisco TX 75034",date:"2025-06-17",time:"2:00 PM",inspector:"Carl Watts",status:"scheduled"}],
-   revenueLog:[]},
-  {id:"r3",name:"Ironclad Roofing",owner:"Steve Nolan",email:"steve@ironcladroofing.com",phone:"972-555-0103",plan:"Pro",status:"trial",
-   territories:["75002","75013"],revenue:6000,leads:7,booked:2,commSettings:{...DEFAULT_COMM},pin:"9999",
-   inspectors:[{id:"i4",name:"Monica Ruiz",phone:"972-555-0204",zones:["75002","75013"]}],
-   inspections:[],revenueLog:[]},
-];
-const INIT_STORMS=[
-  {id:"s1",type:"Hail",location:"Plano, TX",zip:"75023",severity:"severe",date:"2025-06-12",processed:false,lat:33.0198,lng:-96.6989},
-  {id:"s2",type:"Tornado",location:"Frisco, TX",zip:"75034",severity:"extreme",date:"2025-06-13",processed:false,lat:33.1507,lng:-96.8236},
-  {id:"s3",type:"Wind",location:"Allen, TX",zip:"75013",severity:"moderate",date:"2025-06-14",processed:true,lat:33.1032,lng:-96.6706},
-];
-const INIT_LEADS=[
-  {id:"l1",homeowner:"Robert Chen",phone:"972-555-1001",zip:"75023",rooferId:"r1",stormType:"Hail",status:"scheduled",notes:"Has insurance claim filed.",contactedAt:"2025-06-12",followupSent:false,conversations:[{role:"ai",msg:"Hi Robert, we noticed your area (75023) was hit by a Hail storm. Apex Roofing Co offers FREE roof inspections — reply YES to schedule!",ts:"2025-06-12 09:01"},{role:"lead",msg:"YES please!",ts:"2025-06-12 09:45"}]},
-  {id:"l2",homeowner:"Linda Park",phone:"972-555-1002",zip:"75024",rooferId:"r1",stormType:"Hail",status:"contacted",notes:"",contactedAt:"2025-06-12",followupSent:false,conversations:[{role:"ai",msg:"Hi Linda, just a quick note about your roof after the recent Hail storm in 75024. Apex Roofing Co offers FREE inspections!",ts:"2025-06-12 09:02"}]},
-  {id:"l3",homeowner:"Tom Wiley",phone:"972-555-1003",zip:"75025",rooferId:"r1",stormType:"Hail",status:"pending",notes:"",contactedAt:null,followupSent:false,conversations:[]},
-  {id:"l4",homeowner:"Amy Johnson",phone:"972-555-1004",zip:"75034",rooferId:"r2",stormType:"Tornado",status:"scheduled",notes:"Prefers morning appointments.",contactedAt:"2025-06-13",followupSent:false,conversations:[{role:"ai",msg:"Hi Amy, Summit Storm Pros here. FREE inspection available after the Tornado — interested?",ts:"2025-06-13 10:00"},{role:"lead",msg:"Sure, when can you come?",ts:"2025-06-13 10:30"}]},
-  {id:"l5",homeowner:"Gary Foster",phone:"972-555-1005",zip:"75035",rooferId:"r2",stormType:"Tornado",status:"pending",notes:"",contactedAt:null,followupSent:false,conversations:[]},
-  {id:"l6",homeowner:"Nina Ortiz",phone:"972-555-1006",zip:"75002",rooferId:"r3",stormType:"Wind",status:"pending",notes:"",contactedAt:null,followupSent:false,conversations:[]},
-  {id:"l7",homeowner:"Brian Cox",phone:"972-555-1007",zip:"75013",rooferId:"r3",stormType:"Wind",status:"contacted",notes:"Called twice, no answer.",contactedAt:"2025-06-14",followupSent:false,conversations:[{role:"ai",msg:"Hi Brian, Ironclad Roofing here. FREE roof inspection after the Wind storm — interested?",ts:"2025-06-14 08:30"}]},
-];
+// Default operating hours + appointment settings for a roofer's scheduling calendar.
+// hours: per-day open/close window. Closed days simply have open:false.
+const DEFAULT_SCHEDULE = {
+  durationMins: 60,     // default length of an inspection appointment
+  bufferMins: 30,       // gap required between back-to-back appointments
+  hours: {
+    Mon:{open:true,start:"08:00",end:"17:00"},
+    Tue:{open:true,start:"08:00",end:"17:00"},
+    Wed:{open:true,start:"08:00",end:"17:00"},
+    Thu:{open:true,start:"08:00",end:"17:00"},
+    Fri:{open:true,start:"08:00",end:"17:00"},
+    Sat:{open:false,start:"09:00",end:"13:00"},
+    Sun:{open:false,start:"09:00",end:"13:00"},
+  },
+};
 
 // ─── STYLE HELPERS ────────────────────────────────────────────────────────────
 const T = {
@@ -121,6 +319,144 @@ function isWithinCommWindow(comm){
   return nowM>=sh*60+sm&&nowM<=eh*60;
 }
 function fillTemplate(t,v){return t.replace(/{{(\w+)}}/g,(_,k)=>v[k]||"");}
+
+// ─── LEAD DISTRIBUTION ────────────────────────────────────────────────────────
+// Splits a batch of leads for one ZIP evenly across all ACTIVE roofers whose
+// territory includes that ZIP, round-robin style, so no single homeowner is
+// ever assigned to more than one roofer (avoids duplicate/competing SMS).
+const DEMO_FIRST_NAMES=["James","Mary","Robert","Patricia","John","Jennifer","Michael","Linda","David","Barbara","William","Elizabeth","Richard","Susan","Joseph","Jessica","Thomas","Sarah","Charles","Karen"];
+const DEMO_LAST_NAMES=["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez","Wilson","Anderson","Taylor","Thomas","Moore","Jackson","Martin","Lee","Perez","Thompson"];
+function randomDemoName(){
+  const f=DEMO_FIRST_NAMES[Math.floor(Math.random()*DEMO_FIRST_NAMES.length)];
+  const l=DEMO_LAST_NAMES[Math.floor(Math.random()*DEMO_LAST_NAMES.length)];
+  return `${f} ${l}`;
+}
+function randomDemoPhone(){
+  const n=()=>Math.floor(1000+Math.random()*9000);
+  return `972-555-${n()}`.slice(0,12);
+}
+// roofersForZip: active roofers whose territories include the storm's ZIP.
+// leadCount: how many homeowner leads this storm produced in that ZIP.
+// Returns an array of {homeowner, phone, rooferId} — one roofer per lead,
+// assigned round-robin so leads split as evenly as possible.
+function distributeLeadsRoundRobin(roofersForZip, leadCount){
+  if(roofersForZip.length===0) return [];
+  const assignments=[];
+  for(let i=0;i<leadCount;i++){
+    const roofer=roofersForZip[i%roofersForZip.length];
+    assignments.push({homeowner:randomDemoName(),phone:randomDemoPhone(),rooferId:roofer.id});
+  }
+  return assignments;
+}
+
+// ─── AVAILABILITY / SCHEDULING ENGINE ────────────────────────────────────────
+// All math here works in local time using plain Date objects constructed from
+// "YYYY-MM-DDTHH:MM:SS" strings — no timezone library needed since everyone
+// involved (roofer, inspector, homeowner) is assumed to be in the same locale.
+
+const DOW_NAMES=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+function toISODate(d){ return d.toISOString().split("T")[0]; }
+function pad2(n){ return String(n).padStart(2,"0"); }
+function combineDateTime(dateStr,hh,mm){ return `${dateStr}T${pad2(hh)}:${pad2(mm)}:00`; }
+function addMinutesISO(iso,mins){
+  const d=new Date(iso);
+  d.setMinutes(d.getMinutes()+mins);
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:00`;
+}
+function formatTimeLabel(iso){
+  const d=new Date(iso);
+  let h=d.getHours(),m=d.getMinutes();
+  const ampm=h>=12?"PM":"AM";
+  h=h%12; if(h===0) h=12;
+  return `${h}:${pad2(m)} ${ampm}`;
+}
+function formatDateLabel(iso){
+  const d=new Date(iso);
+  return d.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
+}
+
+// Builds a one-click "Add to Google Calendar" link for a single appointment.
+// Uses Google's public calendar render endpoint — no OAuth, no API key, no
+// setup required. Works for any roofer or inspector the moment they click it.
+function googleCalendarLink(ins,roofer){
+  const toGCalStamp=iso=>iso.replace(/[-:]/g,"").slice(0,15); // YYYYMMDDTHHMMSS (local time, no Z)
+  const start=toGCalStamp(ins.startISO);
+  const end=toGCalStamp(ins.endISO);
+  const title=encodeURIComponent(`Roof Inspection — ${ins.client}`);
+  const details=encodeURIComponent(`Inspector: ${ins.inspector}\nCustomer: ${ins.client}${ins.phone?`\nPhone: ${ins.phone}`:""}\nBooked via SkyShield Pro (${roofer?.name||""})`);
+  const location=encodeURIComponent(ins.address||"");
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&location=${location}`;
+}
+
+// Returns true if two [start,end) ISO ranges overlap.
+function rangesOverlap(aStart,aEnd,bStart,bEnd){
+  return new Date(aStart)<new Date(bEnd) && new Date(bStart)<new Date(aEnd);
+}
+
+// Checks whether a candidate appointment conflicts with any existing inspection
+// for the SAME inspector, accounting for the roofer's required buffer time.
+// excludeId lets a reschedule ignore the appointment being moved.
+function hasConflict(inspections,inspectorId,startISO,endISO,bufferMins,excludeId){
+  const bufferedStart=addMinutesISO(startISO,-bufferMins);
+  const bufferedEnd=addMinutesISO(endISO,bufferMins);
+  return inspections.some(ins=>{
+    if(ins.id===excludeId) return false;
+    if(ins.inspectorId!==inspectorId) return false;
+    if(ins.status==="lost"||ins.status==="no-show") return false; // freed-up slots
+    return rangesOverlap(bufferedStart,bufferedEnd,ins.startISO,ins.endISO);
+  });
+}
+
+// Computes all open slots for one inspector on one given date, respecting
+// operating hours, appointment duration, buffer time, and existing bookings.
+function getOpenSlotsForDay(roofer,inspectorId,dateStr,excludeId){
+  const sched=roofer.scheduleSettings||DEFAULT_SCHEDULE;
+  const dow=DOW_NAMES[new Date(dateStr+"T12:00:00").getDay()];
+  const dayHours=sched.hours[dow];
+  if(!dayHours||!dayHours.open) return [];
+
+  const[startH,startM]=dayHours.start.split(":").map(Number);
+  const[endH,endM]=dayHours.end.split(":").map(Number);
+  const dayStart=combineDateTime(dateStr,startH,startM);
+  const dayEnd=combineDateTime(dateStr,endH,endM);
+  const duration=sched.durationMins||60;
+  const buffer=sched.bufferMins||0;
+  const stepMins=30; // slot grid granularity — offer times on the half hour
+
+  const slots=[];
+  let cursor=dayStart;
+  const now=new Date();
+  while(new Date(cursor)<new Date(dayEnd)){
+    const slotEnd=addMinutesISO(cursor,duration);
+    if(new Date(slotEnd)<=new Date(dayEnd)){
+      const inPast=new Date(cursor)<now;
+      const conflict=hasConflict(roofer.inspections,inspectorId,cursor,slotEnd,buffer,excludeId);
+      if(!inPast&&!conflict) slots.push({startISO:cursor,endISO:slotEnd});
+    }
+    cursor=addMinutesISO(cursor,stepMins);
+  }
+  return slots;
+}
+
+// Scans forward from today (or a given start date) across `daysAhead` days to
+// find the next openings for an inspector. Returns up to `limit` results,
+// each carrying both ISO times and pre-formatted labels for display.
+function getNextAvailableSlots(roofer,inspectorId,{daysAhead=14,limit=8,fromDate,excludeId}={}){
+  const results=[];
+  const start=fromDate?new Date(fromDate):new Date();
+  for(let i=0;i<daysAhead&&results.length<limit;i++){
+    const d=new Date(start); d.setDate(d.getDate()+i);
+    const dateStr=toISODate(d);
+    const daySlots=getOpenSlotsForDay(roofer,inspectorId,dateStr,excludeId);
+    for(const slot of daySlots){
+      results.push({...slot,dateStr,dateLabel:formatDateLabel(slot.startISO),timeLabel:formatTimeLabel(slot.startISO)});
+      if(results.length>=limit) break;
+    }
+  }
+  return results;
+}
+
 function exportToCSV(leads,roofers,filename="leads.csv"){
   const h=["Homeowner","Phone","ZIP","Roofer","Storm","Status","Notes","Messages"];
   const rows=leads.map(l=>{const r=roofers.find(x=>x.id===l.rooferId);return[`"${l.homeowner}"`,`"${l.phone}"`,`"${l.zip}"`,`"${r?.name||""}"`,`"${l.stormType}"`,`"${l.status}"`,`"${(l.notes||"").replace(/"/g,'""')}"`,`"${l.conversations.length} msgs"`].join(",");});
@@ -146,8 +482,8 @@ function Btn({children,variant="default",onClick,style={},disabled,small}){
   const v=V[variant]||V.default;
   return <button onClick={onClick} disabled={disabled} style={{background:v.bg,color:v.color,border:`1px solid ${v.border}`,borderRadius:7,padding:small?"4px 11px":"8px 16px",fontSize:small?11:13,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.45:1,whiteSpace:"nowrap",lineHeight:1.4,...style}}>{children}</button>;
 }
-function Input({label,value,onChange,type="text",placeholder,style={}}){
-  return <div style={{display:"flex",flexDirection:"column",gap:5}}>{label&&<label style={T.label}>{label}</label>}<input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 11px",color:C.text,fontSize:13,outline:"none",width:"100%",...style}}/></div>;
+function Input({label,value,onChange,type="text",placeholder,style={},onKeyDown}){
+  return <div style={{display:"flex",flexDirection:"column",gap:5}}>{label&&<label style={T.label}>{label}</label>}<input type={type} value={value} onChange={e=>onChange(e.target.value)} onKeyDown={onKeyDown} placeholder={placeholder} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 11px",color:C.text,fontSize:13,outline:"none",width:"100%",...style}}/></div>;
 }
 function Textarea({label,value,onChange,placeholder,rows=3}){
   return <div style={{display:"flex",flexDirection:"column",gap:5}}>{label&&<label style={T.label}>{label}</label>}<textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 11px",color:C.text,fontSize:13,outline:"none",width:"100%",resize:"vertical",lineHeight:1.6}}/></div>;
@@ -220,9 +556,55 @@ async function callClaude(messages,system="",max_tokens=1200){
   const data=await res.json();
   return data.content?.map(b=>b.text||"").join("")||"No response";
 }
-async function sendTwilioSMS(creds,to,body){
+
+// ─── LEAD-FACING AI CONVERSATION HANDLER ─────────────────────────────────────
+// Generates the AI's next SMS reply to a homeowner lead. Enforces a hard
+// requirement (when roofer.commSettings.requireAdultPresent is true): the AI
+// must get an explicit yes/no on "will an adult 18+ be present" before it is
+// allowed to offer or confirm any appointment time. This is a safety/liability
+// gate, not a suggestion — the prompt instructs Claude to refuse to schedule
+// until that confirmation is obtained, and the app double-checks lead.adultConfirmed
+// before ever actually booking a slot.
+async function generateLeadReply(lead,roofer,conversationHistory){
+  const comm=roofer.commSettings||DEFAULT_COMM;
+  const requireAdult=comm.requireAdultPresent!==false;
+  const adultStatus=lead.adultConfirmed||"unconfirmed";
+
+  const sys=`You are an SMS scheduling assistant texting on behalf of ${roofer.name}, a roofing company, with a potential customer named ${lead.homeowner} whose home in ZIP ${lead.zip} was affected by a ${lead.stormType} storm.
+
+Your job: build rapport, confirm interest in a free roof inspection, and move toward booking an appointment.
+
+${requireAdult?`CRITICAL SAFETY RULE — NON-NEGOTIABLE: Before you may offer or confirm ANY appointment time, you must first get an explicit, unambiguous "yes" that someone 18 years or older will be present at the home during the inspection. Do not skip, soften, or assume this. If the homeowner has not yet confirmed this and the conversation is moving toward scheduling, your NEXT message must ask this directly (you can use natural phrasing, e.g. "${comm.templates.adultCheck||"Will someone 18 or older be home during the inspection?"}"). If they say no or refuse to answer, do not schedule — politely explain that an adult needs to be present for the inspection and ask them to let you know when that's possible. Current adult-confirmation status for this lead: ${adultStatus}.`:""}
+
+Keep replies short (SMS-length, under 300 characters), warm, and conversational — not robotic or formal. Never make up specific appointment times yourself; that's handled separately by the app once adult presence is confirmed.
+
+Respond with ONLY a JSON object, no other text, in this exact shape:
+{"reply":"the SMS text to send","adultConfirmed":"confirmed"|"denied"|"unconfirmed","readyToSchedule":true|false,"needsHumanReview":true|false}
+
+Set adultConfirmed to "confirmed" only on an explicit yes. Set it to "denied" if they say no or refuse. Otherwise leave it "unconfirmed". Set readyToSchedule to true ONLY if adultConfirmed is "confirmed" AND the homeowner has clearly agreed to be scheduled. Set needsHumanReview to true if the homeowner asks something you can't safely answer (pricing specifics, complaints, anything adversarial, or repeated refusal).`;
+
+  const messages=(conversationHistory||[]).map(c=>({role:c.role==="lead"?"user":"assistant",content:c.msg}));
+
+  const raw=await callClaude(messages,sys,400);
+  try{
+    const cleaned=raw.replace(/```json|```/g,"").trim();
+    const parsed=JSON.parse(cleaned);
+    return {
+      reply: parsed.reply || "Thanks for the reply — someone from our team will follow up shortly!",
+      adultConfirmed: ["confirmed","denied","unconfirmed"].includes(parsed.adultConfirmed) ? parsed.adultConfirmed : adultStatus,
+      readyToSchedule: !!parsed.readyToSchedule,
+      needsHumanReview: !!parsed.needsHumanReview,
+    };
+  }catch(e){
+    // If parsing fails, fail safe: don't schedule, flag for a human.
+    return { reply: raw.slice(0,300), adultConfirmed: adultStatus, readyToSchedule:false, needsHumanReview:true };
+  }
+}
+
+async function sendTwilioSMS(creds,to,body,fromOverride){
   const{sid,token,from}=creds;
-  await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,{method:"POST",headers:{"Authorization":`Basic ${btoa(sid+":"+token)}`,"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({To:to,From:from,Body:body})});
+  const fromNumber=fromOverride||from;
+  await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,{method:"POST",headers:{"Authorization":`Basic ${btoa(sid+":"+token)}`,"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({To:to,From:fromNumber,Body:body})});
 }
 async function fetchWeatherAlerts(apiKey,zip){
   const res=await fetch(`https://api.weatherapi.com/v1/alerts.json?key=${apiKey}&q=${zip}`);
@@ -254,7 +636,47 @@ function ActivityFeed({activities}){
   ))}</div>;
 }
 
-// ─── STORM MAP ────────────────────────────────────────────────────────────────
+// ─── NOTIFICATION BELL ────────────────────────────────────────────────────────
+// Shows a roofer's own notifications (new bookings, reschedules) with an
+// unread count badge. Clicking the bell opens a dropdown and marks them read.
+function NotificationBell({roofer,onMarkRead}){
+  const[open,setOpen]=useState(false);
+  const notifications=roofer.notifications||[];
+  const unreadCount=notifications.filter(n=>!n.read).length;
+  const ref=useRef(null);
+
+  useEffect(()=>{
+    function handleClickOutside(e){ if(ref.current&&!ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener("mousedown",handleClickOutside);
+    return()=>document.removeEventListener("mousedown",handleClickOutside);
+  },[]);
+
+  function toggle(){
+    const next=!open;
+    setOpen(next);
+    if(next&&unreadCount>0) onMarkRead();
+  }
+
+  return <div ref={ref} style={{position:"relative"}}>
+    <button onClick={toggle} style={{background:"none",border:"none",cursor:"pointer",position:"relative",padding:"6px",fontSize:18,lineHeight:1,color:C.textSub}}>
+      🔔
+      {unreadCount>0&&<span style={{position:"absolute",top:0,right:0,background:C.red,color:"#fff",borderRadius:"50%",minWidth:16,height:16,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,padding:"0 3px"}}>{unreadCount>9?"9+":unreadCount}</span>}
+    </button>
+    {open&&<div style={{position:"absolute",top:"calc(100% + 8px)",right:0,width:320,maxHeight:380,overflowY:"auto",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 16px 40px rgba(0,0,0,0.5)",zIndex:200}}>
+      <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:600,color:C.text}}>Notifications</div>
+      {notifications.length===0
+        ?<div style={{padding:24,textAlign:"center",fontSize:12,color:C.textMuted}}>No notifications yet.</div>
+        :notifications.map(n=>
+          <div key={n.id} style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,background:n.read?"transparent":C.orangeDim}}>
+            <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{n.message}</div>
+            <div style={{fontSize:10,color:C.textMuted,marginTop:3}}>{n.ts}</div>
+          </div>
+        )}
+    </div>}
+  </div>;
+}
+
+
 function StormMap({storms,roofers}){
   const mapRef=useRef(null),inst=useRef(null);
   useEffect(()=>{
@@ -312,7 +734,7 @@ Always explain in plain English first, then include action blocks. Ask for clari
       while((m=ar.exec(reply))!==null){
         try{
           const{type,payload}=JSON.parse(m[1]);
-          if(type==="add_roofer") onUpdate("add_roofer",{roofer:{id:"r"+Date.now(),revenue:0,leads:0,booked:0,status:"trial",inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},pin:"0000",...payload}});
+          if(type==="add_roofer") onUpdate("add_roofer",{roofer:{id:"r"+Date.now(),revenue:0,leads:0,booked:0,status:"trial",inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},scheduleSettings:{...DEFAULT_SCHEDULE},notifications:[],pin:"0000",...payload}});
           else if(type==="delete_roofer") onUpdate("delete_roofer",payload);
           else if(type==="edit_roofer") onUpdate("edit_roofer",payload);
           else if(type==="add_lead") onUpdate("add_lead",{lead:{id:"l"+Date.now(),conversations:[],notes:"",contactedAt:null,followupSent:false,...payload}});
@@ -359,7 +781,7 @@ function ConversationModal({lead,roofer,onClose,onSendMessage,onUpdateNotes}){
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{...flex(12,"center","space-between"),padding:"8px 12px",background:C.surface,borderRadius:7,flexWrap:"wrap",gap:6}}>
         <div style={flex(12)}><span style={{fontSize:12,color:C.textSub}}>📍 {lead.zip}</span><span style={{fontSize:12,color:C.textSub}}>⛈ {lead.stormType}</span></div>
-        <StatusBadge status={lead.status}/>
+        <div style={flex(6)}><StatusBadge status={lead.status}/><AdultBadge status={lead.adultConfirmed}/></div>
       </div>
       <div style={{...card({padding:12})}}>
         <div style={{...flex(0,"center","space-between"),marginBottom:editing?8:0}}>
@@ -437,14 +859,94 @@ function CommSettingsPanel({roofer,onSave}){
         <Textarea label="Booking Confirmation" value={cfg.templates.booking} onChange={ft("booking")} rows={3}/>
       </div>
     </div>
+    <div style={card()}>
+      <div style={{...T.head(14,600),marginBottom:6}}>🤖 AI Auto-Reply &amp; Safety</div>
+      <div style={{fontSize:12,color:C.textMuted,marginBottom:14,lineHeight:1.6}}>When enabled, incoming lead text replies are answered automatically by AI instead of waiting for you to respond manually.</div>
+
+      <div style={{...flex(10,"center","space-between"),padding:"10px 12px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:10}}>
+        <div>
+          <div style={{fontSize:13,fontWeight:600,color:C.text}}>Enable AI Auto-Reply</div>
+          <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>AI responds to incoming lead texts automatically</div>
+        </div>
+        <button onClick={()=>setCfg(p=>({...p,aiAutoReply:!p.aiAutoReply}))} style={{width:40,height:22,borderRadius:11,border:"none",cursor:"pointer",background:cfg.aiAutoReply?C.green:C.border,position:"relative",flexShrink:0}}>
+          <div style={{width:18,height:18,borderRadius:"50%",background:"#fff",position:"absolute",top:2,left:cfg.aiAutoReply?20:2,transition:"left 0.15s"}}/>
+        </button>
+      </div>
+
+      <div style={{...flex(10,"center","space-between"),padding:"10px 12px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:cfg.requireAdultPresent!==false?10:0}}>
+        <div>
+          <div style={{fontSize:13,fontWeight:600,color:C.text}}>Require Adult-Presence Confirmation</div>
+          <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>AI will not offer or confirm a time until the lead confirms someone 18+ will be home</div>
+        </div>
+        <button onClick={()=>setCfg(p=>({...p,requireAdultPresent:p.requireAdultPresent===false?true:false}))} style={{width:40,height:22,borderRadius:11,border:"none",cursor:"pointer",background:cfg.requireAdultPresent!==false?C.green:C.border,position:"relative",flexShrink:0}}>
+          <div style={{width:18,height:18,borderRadius:"50%",background:"#fff",position:"absolute",top:2,left:cfg.requireAdultPresent!==false?20:2,transition:"left 0.15s"}}/>
+        </button>
+      </div>
+
+      {cfg.requireAdultPresent!==false&&<Textarea label="Adult-Presence Check Message" value={cfg.templates.adultCheck||""} onChange={ft("adultCheck")} placeholder="Will someone 18 or older be home during the inspection?" rows={2}/>}
+
+      <div style={{marginTop:12,padding:"10px 12px",background:C.yellowDim,borderRadius:6,fontSize:12,color:C.textSub,border:`1px solid ${C.yellow}22`,lineHeight:1.6}}>
+        ⚠ Even with this on, the AI Agent in Command Center and the manual "Book" button will still warn you (not block you) if a lead hasn't confirmed adult presence yet — useful if you've already verified this by phone.
+      </div>
+    </div>
     <div style={flex(8,"center","flex-end")}>
       <Btn variant="primary" onClick={()=>onSave(cfg)}>Save Communication Settings</Btn>
     </div>
   </div>;
 }
 
+// ─── SCHEDULE SETTINGS PANEL ──────────────────────────────────────────────────
+// Lets a roofer configure operating hours per day, plus default appointment
+// duration and required buffer time between back-to-back inspections.
+// This directly powers the availability engine — change it here and every
+// open-slot calculation across the app updates immediately.
+function ScheduleSettingsPanel({roofer,onSave}){
+  const[cfg,setCfg]=useState(roofer.scheduleSettings||DEFAULT_SCHEDULE);
+  function updateDay(day,field,value){
+    setCfg(p=>({...p,hours:{...p.hours,[day]:{...p.hours[day],[field]:value}}}));
+  }
+  return <div style={{display:"flex",flexDirection:"column",gap:16}}>
+    <div style={card()}>
+      <div style={{...T.head(14,600),marginBottom:14}}>⏱ Appointment Settings</div>
+      <div style={grid("1fr 1fr",12)}>
+        <Input label="Inspection Duration (minutes)" type="number" value={cfg.durationMins} onChange={v=>setCfg(p=>({...p,durationMins:Number(v)||60}))}/>
+        <Input label="Buffer Between Appointments (minutes)" type="number" value={cfg.bufferMins} onChange={v=>setCfg(p=>({...p,bufferMins:Number(v)||0}))}/>
+      </div>
+      <div style={{marginTop:10,fontSize:12,color:C.textMuted,lineHeight:1.6}}>
+        Example: with a {cfg.durationMins}-minute duration and {cfg.bufferMins}-minute buffer, back-to-back appointments would run roughly every {cfg.durationMins+cfg.bufferMins} minutes.
+      </div>
+    </div>
+    <div style={card()}>
+      <div style={{...T.head(14,600),marginBottom:14}}>🗓 Operating Hours</div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {DAYS_OF_WEEK.map(day=>{
+          const d=cfg.hours[day];
+          return <div key={day} style={{...flex(10,"center","space-between"),padding:"8px 10px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,flexWrap:"wrap"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,minWidth:90}}>
+              <button onClick={()=>updateDay(day,"open",!d.open)} style={{width:36,height:20,borderRadius:10,border:"none",cursor:"pointer",background:d.open?C.green:C.border,position:"relative",transition:"background 0.15s"}}>
+                <div style={{width:16,height:16,borderRadius:"50%",background:"#fff",position:"absolute",top:2,left:d.open?18:2,transition:"left 0.15s"}}/>
+              </button>
+              <span style={{fontSize:13,fontWeight:600,width:36}}>{day}</span>
+            </div>
+            {d.open ? (
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <input type="time" value={d.start} onChange={e=>updateDay(day,"start",e.target.value)} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 8px",color:C.text,fontSize:12,outline:"none"}}/>
+                <span style={{color:C.textMuted,fontSize:12}}>to</span>
+                <input type="time" value={d.end} onChange={e=>updateDay(day,"end",e.target.value)} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:"5px 8px",color:C.text,fontSize:12,outline:"none"}}/>
+              </div>
+            ) : <span style={{fontSize:12,color:C.textMuted}}>Closed</span>}
+          </div>;
+        })}
+      </div>
+    </div>
+    <div style={{...flex(8,"center","flex-end")}}>
+      <Btn variant="primary" onClick={()=>onSave(cfg)}>Save Schedule Settings</Btn>
+    </div>
+  </div>;
+}
+
 function AddRooferModal({onClose,onAdd}){
-  const[f,setF]=useState({name:"",owner:"",email:"",phone:"",territories:"",plan:"Starter",pin:""});
+  const[f,setF]=useState({name:"",owner:"",email:"",phone:"",territories:"",plan:"Starter",pin:"",twilioFrom:""});
   const u=k=>v=>setF(p=>({...p,[k]:v}));
   return <Modal title="Add New Roofer" onClose={onClose}>
     <div style={{display:"flex",flexDirection:"column",gap:13}}>
@@ -455,20 +957,22 @@ function AddRooferModal({onClose,onAdd}){
         <Input label="Phone" value={f.phone} onChange={u("phone")} placeholder="972-555-0100"/>
       </div>
       <Input label="Territories (comma-separated ZIPs)" value={f.territories} onChange={u("territories")} placeholder="75023, 75024, 75025"/>
+      <Input label="Twilio SMS Number (From)" value={f.twilioFrom} onChange={u("twilioFrom")} placeholder="+19725550199"/>
+      <div style={{fontSize:11,color:C.textMuted,marginTop:-6}}>Each roofer texts leads from their own dedicated Twilio number, kept separate from other roofers.</div>
       <div style={grid("1fr 1fr",12)}>
         <Select label="Plan" value={f.plan} onChange={u("plan")} options={["Starter","Pro","Elite"]}/>
         <Input label="Roofer PIN" value={f.pin} onChange={u("pin")} placeholder="e.g. 1234"/>
       </div>
       <div style={{...flex(8,"center","flex-end"),marginTop:6}}>
         <Btn onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" onClick={()=>{if(!f.name||!f.owner)return;onAdd({id:"r"+Date.now(),...f,territories:f.territories.split(",").map(z=>z.trim()).filter(Boolean),revenue:0,leads:0,booked:0,status:"trial",inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM}});onClose();}}>Add Roofer</Btn>
+        <Btn variant="primary" onClick={()=>{if(!f.name||!f.owner)return;onAdd({id:"r"+Date.now(),...f,territories:f.territories.split(",").map(z=>z.trim()).filter(Boolean),revenue:0,leads:0,booked:0,status:"trial",inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},scheduleSettings:{...DEFAULT_SCHEDULE},notifications:[]});onClose();}}>Add Roofer</Btn>
       </div>
     </div>
   </Modal>;
 }
 
 function EditRooferModal({roofer,onClose,onSave}){
-  const[f,setF]=useState({name:roofer.name,owner:roofer.owner,email:roofer.email,phone:roofer.phone,territories:roofer.territories.join(", "),plan:roofer.plan,status:roofer.status,pin:roofer.pin||""});
+  const[f,setF]=useState({name:roofer.name,owner:roofer.owner,email:roofer.email,phone:roofer.phone,territories:roofer.territories.join(", "),plan:roofer.plan,status:roofer.status,pin:roofer.pin||"",twilioFrom:roofer.twilioFrom||""});
   const u=k=>v=>setF(p=>({...p,[k]:v}));
   return <Modal title="Edit Roofer" onClose={onClose}>
     <div style={{display:"flex",flexDirection:"column",gap:13}}>
@@ -479,6 +983,7 @@ function EditRooferModal({roofer,onClose,onSave}){
         <Input label="Phone" value={f.phone} onChange={u("phone")}/>
       </div>
       <Input label="Territories (ZIPs, comma-separated)" value={f.territories} onChange={u("territories")}/>
+      <Input label="Twilio SMS Number (From)" value={f.twilioFrom} onChange={u("twilioFrom")} placeholder="+19725550199"/>
       <div style={grid("1fr 1fr 1fr",12)}>
         <Select label="Plan" value={f.plan} onChange={u("plan")} options={["Starter","Pro","Elite"]}/>
         <Select label="Status" value={f.status} onChange={u("status")} options={["active","trial","cancelled"]}/>
@@ -532,22 +1037,147 @@ function AddInspectorModal({onClose,onAdd}){
   </Modal>;
 }
 
-function AddInspectionModal({roofer,onClose,onAdd}){
-  const[f,setF]=useState({client:"",address:"",date:"",time:"9:00 AM",inspector:""});
-  const u=k=>v=>setF(p=>({...p,[k]:v}));
-  const times=["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM"];
-  return <Modal title="Schedule Inspection" onClose={onClose}>
-    <div style={{display:"flex",flexDirection:"column",gap:13}}>
-      <Input label="Client Name" value={f.client} onChange={u("client")} placeholder="John Smith"/>
-      <Input label="Address" value={f.address} onChange={u("address")} placeholder="1234 Oak Ln, Plano TX 75023"/>
-      <div style={grid("1fr 1fr",12)}>
-        <Input label="Date" value={f.date} onChange={u("date")} type="date"/>
-        <Select label="Time" value={f.time} onChange={u("time")} options={times}/>
+// ─── AVAILABILITY PICKER ──────────────────────────────────────────────────────
+// Shared component used by both the New Appointment modal and the Reschedule
+// modal. Lets the roofer pick an inspector, jump between days, and tap an
+// open slot. Slots already reflect operating hours, duration, buffer time,
+// and existing bookings — so anything shown here is guaranteed conflict-free.
+function AvailabilityPicker({roofer,inspectorId,onInspectorChange,selectedISO,onSelectSlot,excludeId}){
+  const[dateStr,setDateStr]=useState(toISODate(new Date()));
+  const inspector=roofer.inspectors.find(i=>i.id===inspectorId);
+  const slots=inspectorId?getOpenSlotsForDay(roofer,inspectorId,dateStr,excludeId):[];
+  const sched=roofer.scheduleSettings||DEFAULT_SCHEDULE;
+  const dow=DOW_NAMES[new Date(dateStr+"T12:00:00").getDay()];
+  const dayOpen=sched.hours[dow]?.open;
+
+  function shiftDay(delta){
+    const d=new Date(dateStr+"T12:00:00");
+    d.setDate(d.getDate()+delta);
+    setDateStr(toISODate(d));
+  }
+
+  const nextAvailable=inspectorId?getNextAvailableSlots(roofer,inspectorId,{limit:1,excludeId}):[];
+
+  return <div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <Select label="Inspector" value={inspectorId||""} onChange={onInspectorChange} options={[{value:"",label:"Select inspector..."},...roofer.inspectors.map(i=>({value:i.id,label:i.name}))]}/>
+
+    {inspectorId&&<>
+      <div style={{...flex(0,"center","space-between")}}>
+        <Btn small variant="ghost" onClick={()=>shiftDay(-1)}>‹ Prev</Btn>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:13,fontWeight:600}}>{new Date(dateStr+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"})}</div>
+        </div>
+        <Btn small variant="ghost" onClick={()=>shiftDay(1)}>Next ›</Btn>
       </div>
-      <Select label="Inspector" value={f.inspector} onChange={u("inspector")} options={[{value:"",label:"Select inspector..."},...roofer.inspectors.map(i=>({value:i.name,label:i.name}))]}/>
-      <div style={{...flex(8,"center","flex-end"),marginTop:6}}>
+
+      {!dayOpen ? (
+        <div style={{padding:"14px",textAlign:"center",fontSize:12,color:C.textMuted,background:C.surface,borderRadius:7}}>
+          {inspector?.name} is closed on {dow}s.
+          {nextAvailable[0]&&<div style={{marginTop:8}}><Btn small variant="info" onClick={()=>{setDateStr(nextAvailable[0].dateStr);}}>Jump to next opening — {nextAvailable[0].dateLabel}</Btn></div>}
+        </div>
+      ) : slots.length===0 ? (
+        <div style={{padding:"14px",textAlign:"center",fontSize:12,color:C.textMuted,background:C.surface,borderRadius:7}}>
+          No open slots this day — fully booked or already past.
+          {nextAvailable[0]&&<div style={{marginTop:8}}><Btn small variant="info" onClick={()=>{setDateStr(nextAvailable[0].dateStr);}}>Jump to next opening — {nextAvailable[0].dateLabel} at {nextAvailable[0].timeLabel}</Btn></div>}
+        </div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(84px,1fr))",gap:6,maxHeight:180,overflowY:"auto",padding:2}}>
+          {slots.map(s=>{
+            const isSelected=selectedISO===s.startISO;
+            return <button key={s.startISO} onClick={()=>onSelectSlot(s)} style={{padding:"8px 6px",borderRadius:6,fontSize:12,fontWeight:600,cursor:"pointer",background:isSelected?C.orange:C.surface,color:isSelected?"#fff":C.textSub,border:`1px solid ${isSelected?C.orange:C.border}`}}>{formatTimeLabel(s.startISO)}</button>;
+          })}
+        </div>
+      )}
+    </>}
+  </div>;
+}
+
+// ─── NEW / RESCHEDULE APPOINTMENT MODAL ──────────────────────────────────────
+// Handles three flows in one modal:
+//  1. Booking a specific lead (leadToBook passed in) — pre-fills name/phone/zip
+//  2. A roofer manually adding a customer who called them directly (no lead)
+//  3. Rescheding an existing inspection (existingInspection passed in)
+function AddInspectionModal({roofer,onClose,onAdd,onReschedule,leadToBook,existingInspection,leads}){
+  const isReschedule=!!existingInspection;
+  const[customerMode,setCustomerMode]=useState(leadToBook?"lead":"manual"); // "lead" | "manual"
+  const[selectedLeadId,setSelectedLeadId]=useState(leadToBook?.id||"");
+  const[client,setClient]=useState(existingInspection?.client||leadToBook?.homeowner||"");
+  const[phone,setPhone]=useState(leadToBook?.phone||"");
+  const[address,setAddress]=useState(existingInspection?.address||"");
+  const[inspectorId,setInspectorId]=useState(existingInspection?.inspectorId||"");
+  const[selectedSlot,setSelectedSlot]=useState(existingInspection?{startISO:existingInspection.startISO,endISO:existingInspection.endISO}:null);
+  const[error,setError]=useState("");
+
+  const bookableLeads=(leads||[]).filter(l=>l.rooferId===roofer.id&&["pending","contacted","scheduled"].includes(l.status));
+
+  function handleLeadSelect(leadId){
+    setSelectedLeadId(leadId);
+    const lead=bookableLeads.find(l=>l.id===leadId);
+    if(lead){ setClient(lead.homeowner); setPhone(lead.phone); setAddress(lead.zip); }
+  }
+
+  function handleSave(){
+    if(!client.trim()){ setError("Enter the customer's name."); return; }
+    if(!inspectorId){ setError("Select an inspector."); return; }
+    if(!selectedSlot){ setError("Pick an available time slot."); return; }
+    if(customerMode==="lead"&&selectedLeadId){
+      const lead=bookableLeads.find(l=>l.id===selectedLeadId);
+      const comm=roofer.commSettings||DEFAULT_COMM;
+      if(lead&&comm.requireAdultPresent!==false&&lead.adultConfirmed!=="confirmed"){
+        if(!window.confirm(`${lead.homeowner} has not yet confirmed that an adult (18+) will be present during the inspection. Continue booking anyway?`)) return;
+      }
+    }
+    setError("");
+    const inspector=roofer.inspectors.find(i=>i.id===inspectorId);
+    const payload={
+      id:existingInspection?.id||"ins"+Date.now(),
+      client:client.trim(), address:address.trim(),
+      startISO:selectedSlot.startISO, endISO:selectedSlot.endISO,
+      inspectorId, inspector:inspector?.name||"TBD",
+      status:existingInspection?.status||"scheduled",
+      source:customerMode==="lead"?"lead":"manual",
+      leadId:customerMode==="lead"?selectedLeadId:undefined,
+      phone:phone.trim(),
+    };
+    if(isReschedule) onReschedule(payload); else onAdd(payload);
+    onClose();
+  }
+
+  return <Modal title={isReschedule?"Reschedule Inspection":"Schedule Inspection"} onClose={onClose} wide>
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {!isReschedule&&<div style={{display:"flex",gap:4,background:C.surface,borderRadius:7,padding:4}}>
+        {[["lead","Existing Lead"],["manual","New Customer (called in)"]].map(([v,label])=>
+          <button key={v} onClick={()=>setCustomerMode(v)} style={{flex:1,padding:"7px",borderRadius:5,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,background:customerMode===v?C.orange:"transparent",color:customerMode===v?"#fff":C.textMuted}}>{label}</button>
+        )}
+      </div>}
+
+      {!isReschedule&&customerMode==="lead"&&(
+        bookableLeads.length===0
+          ?<div style={{fontSize:12,color:C.textMuted,padding:"10px 12px",background:C.surface,borderRadius:7}}>No bookable leads right now — switch to "New Customer" to add one manually.</div>
+          :<Select label="Select Lead" value={selectedLeadId} onChange={handleLeadSelect} options={[{value:"",label:"Choose a lead..."},...bookableLeads.map(l=>({value:l.id,label:`${l.homeowner} — ${l.zip}`}))]}/>
+      )}
+
+      {(isReschedule||customerMode==="manual"||selectedLeadId)&&<>
+        <div style={grid("1fr 1fr",12)}>
+          <Input label="Customer Name" value={client} onChange={setClient} placeholder="John Smith" style={isReschedule||customerMode==="lead"?{}:undefined}/>
+          <Input label="Phone" value={phone} onChange={setPhone} placeholder="972-555-0100"/>
+        </div>
+        <Input label="Address" value={address} onChange={setAddress} placeholder="1234 Oak Ln, Plano TX 75023"/>
+      </>}
+
+      <Divider/>
+
+      <AvailabilityPicker roofer={roofer} inspectorId={inspectorId} onInspectorChange={setInspectorId} selectedISO={selectedSlot?.startISO} onSelectSlot={setSelectedSlot} excludeId={existingInspection?.id}/>
+
+      {selectedSlot&&<div style={{padding:"10px 12px",background:C.greenDim,borderRadius:7,fontSize:13,color:C.green,border:`1px solid ${C.green}22`}}>
+        ✓ {formatDateLabel(selectedSlot.startISO)} at {formatTimeLabel(selectedSlot.startISO)}
+      </div>}
+
+      {error&&<div style={{color:C.red,fontSize:12,padding:"7px 10px",background:C.redDim,borderRadius:6}}>{error}</div>}
+
+      <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
         <Btn onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" onClick={()=>{if(!f.client||!f.date)return;onAdd({id:"ins"+Date.now(),...f,status:"scheduled"});onClose();}}>Schedule</Btn>
+        <Btn variant="primary" onClick={handleSave}>{isReschedule?"Save New Time":"Schedule Inspection"}</Btn>
       </div>
     </div>
   </Modal>;
@@ -571,37 +1201,220 @@ function ScanScheduler({scanSettings,onChange}){
 }
 
 // ─── LOGIN SCREEN ─────────────────────────────────────────────────────────────
-function LoginScreen({roofers,onAdminLogin,onRooferLogin}){
-  const[mode,setMode]=useState("admin"),[pin,setPin]=useState(""),[selectedId,setSelectedId]=useState(roofers[0]?.id||""),[error,setError]=useState("");
-  function handleLogin(){
-    if(mode==="admin"){if(pin==="admin"||pin==="1111"){onAdminLogin();return;}setError("Invalid admin PIN. Try: admin");}
-    else{const r=roofers.find(x=>x.id===selectedId);if(r&&(r.pin||"0000")===pin){onRooferLogin(r);return;}setError("Incorrect PIN for this company.");}
+// ─── WHAT'S NEW MODAL ────────────────────────────────────────────────────────
+// Shows automatically when the user logs in and the app version is newer than
+// the last version they acknowledged. Dismissing it saves the current version
+// to Supabase so it won't show again until the next deploy.
+function WhatsNewModal({onDismiss}){
+  return(
+    <div style={{
+      position:"fixed",inset:0,zIndex:9999,
+      background:"rgba(0,0,0,0.7)",backdropFilter:"blur(4px)",
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20,
+    }}>
+      <div style={{
+        background:C.card,border:`1px solid ${C.borderAct}`,
+        borderRadius:16,width:"100%",maxWidth:520,
+        boxShadow:`0 24px 60px rgba(0,0,0,0.5),0 0 0 1px ${C.orange}22`,
+        overflow:"hidden",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding:"20px 24px 16px",
+          background:`linear-gradient(135deg,rgba(13,148,136,0.15),rgba(2,132,199,0.1))`,
+          borderBottom:`1px solid ${C.border}`,
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
+            <div style={{
+              width:36,height:36,borderRadius:10,
+              background:"linear-gradient(135deg,#0d9488,#0284c7)",
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,
+              boxShadow:"0 4px 14px rgba(13,148,136,0.4)",flexShrink:0,
+            }}>⛈</div>
+            <div>
+              <div style={{fontSize:16,fontWeight:700,color:C.text,letterSpacing:"-0.01em"}}>
+                What's New in SkyShield Pro
+              </div>
+              <div style={{fontSize:11,color:C.textSub,marginTop:1}}>
+                Version {CHANGELOG[0].version} · {CHANGELOG[0].date}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Changelog entries — most recent first */}
+        <div style={{padding:"16px 24px",maxHeight:360,overflowY:"auto"}}>
+          {CHANGELOG.map((entry,ei)=>(
+            <div key={entry.version} style={{marginBottom:ei<CHANGELOG.length-1?20:0}}>
+              {ei>0&&(
+                <div style={{fontSize:12,fontWeight:600,color:C.textSub,
+                  marginBottom:10,paddingTop:4,
+                  borderTop:`1px solid ${C.border}`}}>
+                  v{entry.version} · {entry.date}
+                </div>
+              )}
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {entry.changes.map((change,ci)=>(
+                  <div key={ci} style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                    <div style={{
+                      width:18,height:18,borderRadius:"50%",flexShrink:0,marginTop:1,
+                      background:ei===0?`${C.orange}18`:`${C.border}`,
+                      border:`1px solid ${ei===0?C.orange+"44":C.border}`,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:9,color:ei===0?C.orange:C.textMuted,fontWeight:700,
+                    }}>✓</div>
+                    <div style={{fontSize:13,color:ei===0?C.text:C.textSub,lineHeight:1.5}}>
+                      {change}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          padding:"14px 24px",
+          borderTop:`1px solid ${C.border}`,
+          display:"flex",justifyContent:"flex-end",
+        }}>
+          <button onClick={onDismiss} style={{
+            fontSize:13,fontWeight:600,
+            padding:"9px 24px",borderRadius:9,
+            background:`linear-gradient(135deg,#0d9488,#0284c7)`,
+            color:"#fff",border:"none",cursor:"pointer",
+            boxShadow:"0 4px 14px rgba(13,148,136,0.35)",
+          }}>Got it</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen({onLoginSuccess}){
+  const[view,setView]=useState("signin"); // signin | forgot | sent
+  const[email,setEmail]=useState(""),[password,setPassword]=useState("");
+  const[error,setError]=useState(""),[loading,setLoading]=useState(false);
+
+  async function handleSignIn(){
+    if(!email||!password){setError("Please enter your email and password.");return;}
+    setLoading(true);setError("");
+    try{
+      const data=await supabaseSignIn(email.trim(),password);
+      onLoginSuccess(data);
+    }catch(e){setError(e.message);}
+    setLoading(false);
   }
+
+  async function handleForgotPassword(){
+    if(!email){setError("Enter your email address first.");return;}
+    setLoading(true);setError("");
+    try{
+      await supabaseResetPassword(email.trim());
+      setView("sent");
+    }catch(e){setError(e.message);}
+    setLoading(false);
+  }
+
   return <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
     <div style={{width:"100%",maxWidth:380}}>
       <div style={{textAlign:"center",marginBottom:32}}>
-        <div style={{width:56,height:56,borderRadius:14,background:`linear-gradient(135deg,${C.orange},#c0392b)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,margin:"0 auto 16px"}}>⛈</div>
+        <div style={{width:56,height:56,borderRadius:14,background:"linear-gradient(135deg,#0d9488,#0284c7)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,margin:"0 auto 16px"}}>⛈</div>
+        <div style={{...T.head(24,700),letterSpacing:"-0.02em"}}>Sky<span style={{color:C.orange}}>Shield</span> Pro</div>
+        <div style={{fontSize:10,color:C.textMuted,letterSpacing:"0.1em",textTransform:"uppercase",marginTop:6}}>Powered by Ark Dynamics</div>
+      </div>
+
+      <div style={card({padding:24})}>
+        {view==="sent" ? (
+          <div style={{textAlign:"center",padding:"10px 0"}}>
+            <div style={{fontSize:32,marginBottom:12}}>📧</div>
+            <div style={{...T.head(15,600),marginBottom:8}}>Check your email</div>
+            <div style={{fontSize:13,color:C.textSub,lineHeight:1.6,marginBottom:18}}>
+              We sent a password reset link to <strong style={{color:C.text}}>{email}</strong>. Click the link to set a new password.
+            </div>
+            <Btn variant="default" onClick={()=>{setView("signin");setError("");}} style={{width:"100%"}}>Back to Sign In</Btn>
+          </div>
+        ) : view==="forgot" ? (
+          <div>
+            <div style={{...T.head(15,600),marginBottom:6}}>Reset your password</div>
+            <div style={{fontSize:13,color:C.textMuted,marginBottom:18,lineHeight:1.6}}>Enter your account email and we'll send you a link to reset your password.</div>
+            <div style={{marginBottom:14}}><Input label="Email" type="email" value={email} onChange={v=>{setEmail(v);setError("");}} placeholder="you@company.com"/></div>
+            {error&&<div style={{color:C.red,fontSize:12,marginBottom:12,padding:"7px 10px",background:C.redDim,borderRadius:6}}>{error}</div>}
+            <Btn variant="primary" onClick={handleForgotPassword} disabled={loading} style={{width:"100%",padding:"10px",fontSize:14}}>{loading?"Sending...":"Send Reset Link"}</Btn>
+            <button onClick={()=>{setView("signin");setError("");}} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:"none",color:C.textMuted,fontSize:12,marginTop:14,cursor:"pointer"}}>← Back to Sign In</button>
+          </div>
+        ) : (
+          <div>
+            <div style={{marginBottom:14}}><Input label="Email" type="email" value={email} onChange={v=>{setEmail(v);setError("");}} placeholder="you@company.com"/></div>
+            <div style={{marginBottom:8}}><Input label="Password" type="password" value={password} onChange={v=>{setPassword(v);setError("");}} placeholder="Enter your password" onKeyDown={e=>e.key==="Enter"&&handleSignIn()}/></div>
+            <button onClick={()=>{setView("forgot");setError("");}} style={{display:"block",background:"none",border:"none",color:C.orange,fontSize:12,marginBottom:16,cursor:"pointer",padding:0}}>Forgot password?</button>
+            {error&&<div style={{color:C.red,fontSize:12,marginBottom:12,padding:"7px 10px",background:C.redDim,borderRadius:6}}>{error}</div>}
+            <Btn variant="primary" onClick={handleSignIn} disabled={loading} style={{width:"100%",padding:"10px",fontSize:14}}>{loading?"Signing in...":"Sign In"}</Btn>
+          </div>
+        )}
+      </div>
+    </div>
+  </div>;
+}
+
+// ─── RESET PASSWORD SCREEN ────────────────────────────────────────────────────
+// Shown when the user arrives via the password-reset email link.
+// Supabase appends #access_token=...&type=recovery to the URL.
+function ResetPasswordScreen({accessToken,onDone}){
+  const[password,setPassword]=useState(""),[confirm,setConfirm]=useState("");
+  const[error,setError]=useState(""),[loading,setLoading]=useState(false),[success,setSuccess]=useState(false);
+
+  async function handleReset(){
+    if(!password||password.length<6){setError("Password must be at least 6 characters.");return;}
+    if(password!==confirm){setError("Passwords do not match.");return;}
+    setLoading(true);setError("");
+    try{
+      await supabaseUpdatePassword(accessToken,password);
+      setSuccess(true);
+      setTimeout(()=>onDone(),2500);
+    }catch(e){setError(e.message);}
+    setLoading(false);
+  }
+
+  return <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+    <div style={{width:"100%",maxWidth:380}}>
+      <div style={{textAlign:"center",marginBottom:32}}>
+        <div style={{width:56,height:56,borderRadius:14,background:"linear-gradient(135deg,#0d9488,#0284c7)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,margin:"0 auto 16px"}}>⛈</div>
         <div style={{...T.head(24,700),letterSpacing:"-0.02em"}}>Sky<span style={{color:C.orange}}>Shield</span> Pro</div>
         <div style={{fontSize:10,color:C.textMuted,letterSpacing:"0.1em",textTransform:"uppercase",marginTop:6}}>Powered by Ark Dynamics</div>
       </div>
       <div style={card({padding:24})}>
-        <div style={{display:"flex",gap:4,marginBottom:20,background:C.surface,borderRadius:8,padding:4}}>
-          {["admin","roofer"].map(m=><button key={m} onClick={()=>{setMode(m);setPin("");setError("");}} style={{flex:1,padding:"8px",borderRadius:6,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:mode===m?C.orange:C.surface,color:mode===m?"#fff":C.textMuted,transition:"all 0.15s"}}>{m==="admin"?"Admin Login":"Roofer Login"}</button>)}
-        </div>
-        {mode==="roofer"&&<div style={{marginBottom:14}}><Select label="Select Your Company" value={selectedId} onChange={setSelectedId} options={roofers.map(r=>({value:r.id,label:r.name}))}/></div>}
-        <div style={{marginBottom:14}}><Input label="PIN" type="password" value={pin} onChange={v=>{setPin(v);setError("");}} placeholder={mode==="admin"?"Admin PIN":"4-digit PIN"}/></div>
-        {error&&<div style={{color:C.red,fontSize:12,marginBottom:12,padding:"7px 10px",background:C.redDim,borderRadius:6}}>{error}</div>}
-        <Btn variant="primary" onClick={handleLogin} style={{width:"100%",padding:"10px",fontSize:14}}>Sign In</Btn>
-        <div style={{marginTop:14,padding:"10px 12px",background:C.surface,borderRadius:6,fontSize:11,color:C.textMuted,lineHeight:1.7}}>
-          <strong style={{color:C.textSub}}>Demo credentials:</strong><br/>
-          Admin PIN: <code>admin</code> &nbsp;·&nbsp; Roofer PINs: <code>1234</code> / <code>5678</code> / <code>9999</code>
-        </div>
+        {success ? (
+          <div style={{textAlign:"center",padding:"10px 0"}}>
+            <div style={{fontSize:32,marginBottom:12}}>✅</div>
+            <div style={{...T.head(15,600),marginBottom:8}}>Password updated</div>
+            <div style={{fontSize:13,color:C.textSub,lineHeight:1.6}}>Redirecting you to sign in...</div>
+          </div>
+        ) : (
+          <div>
+            <div style={{...T.head(15,600),marginBottom:6}}>Set a new password</div>
+            <div style={{fontSize:13,color:C.textMuted,marginBottom:18,lineHeight:1.6}}>Choose a new password for your account.</div>
+            <div style={{marginBottom:12}}><Input label="New Password" type="password" value={password} onChange={v=>{setPassword(v);setError("");}} placeholder="At least 6 characters"/></div>
+            <div style={{marginBottom:14}}><Input label="Confirm Password" type="password" value={confirm} onChange={v=>{setConfirm(v);setError("");}} placeholder="Re-enter password" onKeyDown={e=>e.key==="Enter"&&handleReset()}/></div>
+            {error&&<div style={{color:C.red,fontSize:12,marginBottom:12,padding:"7px 10px",background:C.redDim,borderRadius:6}}>{error}</div>}
+            <Btn variant="primary" onClick={handleReset} disabled={loading} style={{width:"100%",padding:"10px",fontSize:14}}>{loading?"Updating...":"Update Password"}</Btn>
+          </div>
+        )}
       </div>
     </div>
   </div>;
 }
 
 // ─── LEAD ROW ─────────────────────────────────────────────────────────────────
+function AdultBadge({status}){
+  const s=status||"unconfirmed";
+  if(s==="confirmed") return <Badge label="adult ✓" color={C.green} small/>;
+  if(s==="denied") return <Badge label="adult ✗" color={C.red} small/>;
+  if(s==="pending") return <Badge label="adult ?" color={C.yellow} small/>;
+  return <Badge label="adult —" color={C.textMuted} small/>;
+}
+
 function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRevenue,showRoofer}){
   const roofer=roofers.find(r=>r.id===lead.rooferId);
   const unread=(lead.conversations||[]).filter(c=>c.role==="lead").length;
@@ -611,7 +1424,7 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
     <TD>{lead.zip}</TD>
     {showRoofer&&<TD dim>{roofer?.name||"—"}</TD>}
     <TD dim>{lead.stormType}</TD>
-    <TD><StatusBadge status={lead.status}/></TD>
+    <TD><div style={{display:"flex",gap:4,flexWrap:"wrap"}}><StatusBadge status={lead.status}/><AdultBadge status={lead.adultConfirmed}/></div></TD>
     <TD nowrap>
       <div style={{...flex(4),flexWrap:"wrap"}}>
         <button onClick={()=>onViewConvo(lead)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,position:"relative",padding:"3px 5px",lineHeight:1}}>
@@ -631,7 +1444,7 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
 function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
   const[tab,setTab]=useState("Overview");
   const[showAddInspector,setShowAddInspector]=useState(false);
-  const[showAddInspection,setShowAddInspection]=useState(false);
+  const[bookingModal,setBookingModal]=useState(null); // {leadToBook} | {existingInspection} | {} for blank manual
   const[editingLead,setEditingLead]=useState(null);
   const[viewingConvo,setViewingConvo]=useState(null);
   const[loggingRevenue,setLoggingRevenue]=useState(null);
@@ -650,7 +1463,7 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
     const comm=roofer.commSettings||DEFAULT_COMM;
     if(!isWithinCommWindow(comm)&&!window.confirm("Outside active hours. Send anyway?")) return;
     const msg=fillTemplate(comm.templates.initial,{name:lead.homeowner,zip:lead.zip,storm:lead.stormType,company:roofer.name});
-    if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,msg);
+    if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer.twilioFrom);
     onUpdate("lead_status",{leadId:lead.id,status:"contacted"});
     onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
     onUpdate("set_contacted_at",{leadId:lead.id,ts:new Date().toISOString().split("T")[0]});
@@ -659,18 +1472,23 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
   }
   function bookLead(lead){
     const inspector=roofer.inspectors.find(i=>i.zones.includes(lead.zip))||roofer.inspectors[0];
-    const d=new Date();d.setDate(d.getDate()+2);
-    const dateStr=d.toISOString().split("T")[0];
-    const ins={id:"ins"+Date.now(),client:lead.homeowner,address:lead.zip,date:dateStr,time:"10:00 AM",inspector:inspector?.name||"TBD",status:"scheduled"};
-    onUpdate("book_lead",{leadId:lead.id,rooferId:roofer.id,inspection:ins});
+    if(!inspector){ alert("Add an inspector before booking inspections."); return; }
     const comm=roofer.commSettings||DEFAULT_COMM;
-    const msg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:dateStr,time:"10:00 AM",inspector:inspector?.name||"TBD",company:roofer.name});
-    if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg);
+    if(comm.requireAdultPresent!==false&&lead.adultConfirmed!=="confirmed"){
+      if(!window.confirm(`${lead.homeowner} has not yet confirmed that an adult (18+) will be present during the inspection. Continue booking anyway? (You can confirm this yourself by phone first.)`)) return;
+    }
+    const nextSlot=getNextAvailableSlots(roofer,inspector.id,{limit:1})[0];
+    if(!nextSlot){ alert("No available slots found in the next 14 days for "+inspector.name+". Check operating hours in Schedule settings."); return; }
+    const ins={id:"ins"+Date.now(),client:lead.homeowner,address:lead.zip,phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
+    onUpdate("book_lead",{leadId:lead.id,rooferId:roofer.id,inspection:ins});
+    const msg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:formatDateLabel(nextSlot.startISO),time:formatTimeLabel(nextSlot.startISO),inspector:inspector.name,company:roofer.name});
+    if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer.twilioFrom);
     onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
-    addActivity({type:"booking",message:`Inspection booked for ${lead.homeowner}`,badge:"scheduled",badgeColor:C.green});
+    addActivity({type:"booking",message:`Inspection booked for ${lead.homeowner} — ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)}`,badge:"scheduled",badgeColor:C.green});
+    onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"booking",message:`New inspection booked: ${lead.homeowner} on ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)} with ${inspector.name}`,smsText:`SkyShield Pro: New inspection booked — ${lead.homeowner} on ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)} with ${inspector.name}.`}});
   }
   function sendManualMessage(lead,msg){
-    if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg);
+    if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer.twilioFrom);
     onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
   }
   function logRevenue(entry){
@@ -681,17 +1499,30 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
 
   const revByMonth=(roofer.revenueLog||[]).reduce((acc,r)=>{const mo=r.date?.slice(0,7)||"?";acc[mo]=(acc[mo]||0)+r.amount;return acc;},{});
   const revChart=Object.entries(revByMonth).slice(-6).map(([label,value])=>({label:label.slice(5),value,color:C.green}));
-  const groupedIns=roofer.inspections.reduce((acc,ins)=>{(acc[ins.date]||(acc[ins.date]=[])).push(ins);return acc;},{});
+  const sortedInspections=[...roofer.inspections].sort((a,b)=>new Date(a.startISO)-new Date(b.startISO));
+  const groupedIns=sortedInspections.reduce((acc,ins)=>{const d=ins.startISO.split("T")[0];(acc[d]||(acc[d]=[])).push(ins);return acc;},{});
   const ctx=`Roofer: ${roofer.name}. Leads: ${myLeads.length}, Booked: ${scheduled.length}, Won: ${won.length}, Revenue: $${roofer.revenue.toLocaleString()}`;
 
   return <div>
     {showAddInspector&&<AddInspectorModal onClose={()=>setShowAddInspector(false)} onAdd={insp=>onUpdate("add_inspector",{rooferId:roofer.id,inspector:insp})}/>}
-    {showAddInspection&&<AddInspectionModal roofer={roofer} onClose={()=>setShowAddInspection(false)} onAdd={ins=>onUpdate("add_inspection",{rooferId:roofer.id,inspection:ins})}/>}
+    {bookingModal&&<AddInspectionModal roofer={roofer} leads={leads} leadToBook={bookingModal.leadToBook} existingInspection={bookingModal.existingInspection}
+      onClose={()=>setBookingModal(null)}
+      onAdd={ins=>{
+        onUpdate("add_inspection",{rooferId:roofer.id,inspection:ins});
+        if(ins.leadId) onUpdate("lead_status",{leadId:ins.leadId,status:"scheduled"});
+        addActivity({type:"booking",message:`Inspection booked for ${ins.client} — ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}`,badge:"scheduled",badgeColor:C.green});
+        onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"booking",message:`New appointment: ${ins.client} on ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)} with ${ins.inspector}`,smsText:`SkyShield Pro: New appointment booked — ${ins.client} on ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)} with ${ins.inspector}.`}});
+      }}
+      onReschedule={ins=>{
+        onUpdate("reschedule_inspection",{rooferId:roofer.id,inspection:ins});
+        addActivity({type:"booking",message:`${ins.client}'s inspection moved to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}`,badge:"rescheduled",badgeColor:C.yellow});
+        onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"reschedule",message:`Rescheduled: ${ins.client} moved to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}`,smsText:`SkyShield Pro: ${ins.client}'s inspection was moved to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}.`}});
+      }}/>}
     {editingLead&&<EditLeadModal lead={editingLead} roofers={[roofer]} onClose={()=>setEditingLead(null)} onSave={l=>onUpdate("edit_lead",{lead:l})}/>}
     {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofer} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
-    <Tabs tabs={["Overview","Leads","Calendar","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={setTab}/>
+    <Tabs tabs={["Overview","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={setTab}/>
 
     {tab==="Overview"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12}}>
@@ -718,12 +1549,14 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
       </div>
       <div style={card()}>
         <div style={{...T.head(13,600),marginBottom:14}}>Upcoming Inspections</div>
-        {roofer.inspections.filter(i=>i.status==="scheduled").length===0
-          ?<div style={{color:C.textMuted,fontSize:13}}>No scheduled inspections.</div>
-          :roofer.inspections.filter(i=>i.status==="scheduled").slice(0,5).map(ins=><div key={ins.id} style={{...flex(0,"center","space-between"),padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
+        {(()=>{
+          const upcoming=roofer.inspections.filter(i=>i.status==="scheduled"&&new Date(i.startISO)>=new Date()).sort((a,b)=>new Date(a.startISO)-new Date(b.startISO)).slice(0,5);
+          if(upcoming.length===0) return <div style={{color:C.textMuted,fontSize:13}}>No upcoming inspections.</div>;
+          return upcoming.map(ins=><div key={ins.id} style={{...flex(0,"center","space-between"),padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
             <div><div style={{fontSize:13,fontWeight:600}}>{ins.client}</div><div style={{fontSize:12,color:C.textSub,marginTop:2}}>{ins.address}</div></div>
-            <div style={{textAlign:"right"}}><div style={{fontSize:12,color:C.orange,fontWeight:500}}>{ins.date} · {ins.time}</div><div style={{fontSize:12,color:C.textMuted}}>{ins.inspector}</div></div>
-          </div>)}
+            <div style={{textAlign:"right"}}><div style={{fontSize:12,color:C.orange,fontWeight:500}}>{formatDateLabel(ins.startISO)} · {formatTimeLabel(ins.startISO)}</div><div style={{fontSize:12,color:C.textMuted}}>{ins.inspector}</div></div>
+          </div>);
+        })()}
       </div>
     </div>}
 
@@ -743,22 +1576,37 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
     </div>}
 
     {tab==="Calendar"&&<div>
-      <div style={{...flex(0,"center","flex-end"),marginBottom:14}}><Btn variant="primary" onClick={()=>setShowAddInspection(true)}>+ Add Inspection</Btn></div>
-      {Object.keys(groupedIns).length===0?<div style={{...card({textAlign:"center",padding:40,color:C.textMuted,fontSize:13})}}>No inspections scheduled.</div>:Object.entries(groupedIns).sort().map(([date,insps])=><div key={date} style={{marginBottom:16}}>
-        <div style={{...T.head(12,600),color:C.orange,marginBottom:8}}>{date}</div>
+      <div style={{...flex(0,"center","space-between"),marginBottom:14,flexWrap:"wrap",gap:8}}>
+        <div style={{fontSize:12,color:C.textMuted}}>{roofer.inspectors.length===0?"Add an inspector first to enable scheduling.":`${roofer.inspectors.length} inspector(s) · ${(roofer.scheduleSettings||DEFAULT_SCHEDULE).durationMins}min appointments`}</div>
+        <Btn variant="primary" onClick={()=>setBookingModal({})} disabled={roofer.inspectors.length===0}>+ New Appointment</Btn>
+      </div>
+      {Object.keys(groupedIns).length===0?<div style={{...card({textAlign:"center",padding:40,color:C.textMuted,fontSize:13})}}>No inspections scheduled. Click "+ New Appointment" to add a walk-in customer or book a lead.</div>:Object.entries(groupedIns).sort().map(([date,insps])=><div key={date} style={{marginBottom:16}}>
+        <div style={{...T.head(12,600),color:C.orange,marginBottom:8}}>{new Date(date+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"})}</div>
         {insps.map(ins=><div key={ins.id} style={{...card({marginBottom:8,padding:"14px 16px"})}}>
-          <div style={{...flex(0,"flex-start","space-between"),gap:12}}>
-            <div><div style={{fontSize:13,fontWeight:600}}>{ins.client}</div><div style={{fontSize:12,color:C.textSub,marginTop:2}}>{ins.address}</div></div>
+          <div style={{...flex(0,"flex-start","space-between"),gap:12,flexWrap:"wrap"}}>
+            <div>
+              <div style={{...flex(6,"center")}}>
+                <div style={{fontSize:13,fontWeight:600}}>{ins.client}</div>
+                <Badge label={ins.source==="manual"?"called in":"from lead"} color={ins.source==="manual"?C.purple:C.blue} small/>
+              </div>
+              <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{ins.address}{ins.phone?` · ${ins.phone}`:""}</div>
+            </div>
             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
-              <div style={{fontSize:12,color:C.orange,fontWeight:500}}>{ins.time} · {ins.inspector}</div>
-              <select value={ins.status} onChange={e=>onUpdate("update_inspection_status",{rooferId:roofer.id,inspectionId:ins.id,status:e.target.value})} style={{background:C.surface,border:`1px solid ${INS_STATUS_COLORS[ins.status]||C.border}`,borderRadius:5,padding:"3px 8px",color:INS_STATUS_COLORS[ins.status]||C.text,fontSize:11,cursor:"pointer"}}>
-                {INSPECTION_STATUSES.map(st=><option key={st} value={st}>{st}</option>)}
-              </select>
+              <div style={{fontSize:12,color:C.orange,fontWeight:500}}>{formatTimeLabel(ins.startISO)}–{formatTimeLabel(ins.endISO)} · {ins.inspector}</div>
+              <div style={flex(6)}>
+                <select value={ins.status} onChange={e=>onUpdate("update_inspection_status",{rooferId:roofer.id,inspectionId:ins.id,status:e.target.value})} style={{background:C.surface,border:`1px solid ${INS_STATUS_COLORS[ins.status]||C.border}`,borderRadius:5,padding:"3px 8px",color:INS_STATUS_COLORS[ins.status]||C.text,fontSize:11,cursor:"pointer"}}>
+                  {INSPECTION_STATUSES.map(st=><option key={st} value={st}>{st}</option>)}
+                </select>
+                {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>setBookingModal({existingInspection:ins})}>↻ Reschedule</Btn>}
+                <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer"><Btn small variant="ghost">📅 Add to Google Cal</Btn></a>
+              </div>
             </div>
           </div>
         </div>)}
       </div>)}
     </div>}
+
+    {tab==="Schedule"&&<ScheduleSettingsPanel roofer={roofer} onSave={settings=>onUpdate("update_schedule_settings",{rooferId:roofer.id,settings})}/>}
 
     {tab==="Revenue"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12}}>
@@ -806,6 +1654,29 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
 
     {tab==="Comm Settings"&&<CommSettingsPanel roofer={roofer} onSave={settings=>onUpdate("update_comm_settings",{rooferId:roofer.id,settings})}/>}
     {tab==="AI Agent"&&<AIAgent roofers={[roofer]} leads={myLeads} storms={[]} apiKeys={apiKeys} onUpdate={onUpdate} context={ctx}/>}
+  </div>;
+}
+
+// ─── QUICK SMS NUMBER ASSIGNMENT ROW (admin only) ────────────────────────────
+function QuickAssignRow({roofer,onSave}){
+  const[value,setValue]=useState(roofer.twilioFrom||"");
+  const[saved,setSaved]=useState(false);
+  const dirty=value!==(roofer.twilioFrom||"");
+  function handleSave(){
+    onSave(value.trim());
+    setSaved(true);
+    setTimeout(()=>setSaved(false),1800);
+  }
+  return <div style={{...flex(10,"center","space-between"),padding:"8px 10px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`}}>
+    <div style={{minWidth:0,flex:"0 0 160px"}}>
+      <div style={{fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{roofer.name}</div>
+      <div style={{fontSize:10,color:C.textMuted}}>{roofer.territories.join(", ")||"no territories"}</div>
+    </div>
+    <div style={{flex:1,display:"flex",gap:8,alignItems:"center",minWidth:0}}>
+      <input value={value} onChange={e=>setValue(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSave()} placeholder="+19725550199"
+        style={{flex:1,minWidth:0,background:C.card,border:`1px solid ${dirty?C.orange:C.border}`,borderRadius:6,padding:"6px 10px",color:C.text,fontSize:13,outline:"none"}}/>
+      <Btn small variant={saved?"success":"primary"} onClick={handleSave} disabled={!dirty&&!saved} style={{flexShrink:0}}>{saved?"✓ Saved":"Assign"}</Btn>
+    </div>
   </div>;
 }
 
@@ -869,7 +1740,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
         const days=Math.floor((now-new Date(lead.contactedAt))/86400000);
         if(days>=(comm.followupDays||2)){
           const msg=fillTemplate(comm.templates.followup,{name:lead.homeowner,zip:lead.zip,storm:lead.stormType,company:roofer?.name||"us"});
-          if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg);
+          if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer?.twilioFrom);
           onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
           onUpdate("mark_followup_sent",{leadId:lead.id});
           addActivity({type:"followup",message:`Auto follow-up sent to ${lead.homeowner}`,badge:"follow-up",badgeColor:C.yellow});
@@ -892,14 +1763,55 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
       const enc=btoa(apiKeys.twilio.sid+":"+apiKeys.twilio.token);
       const res=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${apiKeys.twilio.sid}/Messages.json?PageSize=20&Direction=inbound`,{headers:{"Authorization":"Basic "+enc}});
       const data=await res.json();
-      (data.messages||[]).forEach(m=>{
+      for(const m of (data.messages||[])){
         const cp=m.from.replace(/\D/g,"");
         const lead=leads.find(l=>l.phone.replace(/\D/g,"")===cp);
-        if(lead&&!lead.conversations.some(c=>c.ts===m.date_sent&&c.role==="lead")){
-          onUpdate("add_conversation",{leadId:lead.id,entry:{role:"lead",msg:m.body,ts:m.date_sent}});
-          addActivity({type:"sms",message:`Reply from ${lead.homeowner}: "${m.body.slice(0,60)}"`,badge:"reply",badgeColor:C.green});
+        if(!lead) continue;
+        if(lead.conversations.some(c=>c.ts===m.date_sent&&c.role==="lead")) continue;
+
+        onUpdate("add_conversation",{leadId:lead.id,entry:{role:"lead",msg:m.body,ts:m.date_sent}});
+        addActivity({type:"sms",message:`Reply from ${lead.homeowner}: "${m.body.slice(0,60)}"`,badge:"reply",badgeColor:C.green});
+
+        const roofer=roofers.find(r=>r.id===lead.rooferId);
+        const comm=roofer?.commSettings||DEFAULT_COMM;
+        if(roofer&&comm.aiAutoReply){
+          try{
+            const history=[...lead.conversations,{role:"lead",msg:m.body,ts:m.date_sent}];
+            const result=await generateLeadReply(lead,roofer,history);
+
+            if(result.adultConfirmed!==(lead.adultConfirmed||"unconfirmed")){
+              onUpdate("update_adult_confirmed",{leadId:lead.id,status:result.adultConfirmed});
+              if(result.adultConfirmed==="confirmed") addActivity({type:"system",message:`${lead.homeowner} confirmed an adult will be present for the inspection`,badge:"verified",badgeColor:C.green});
+              if(result.adultConfirmed==="denied") addActivity({type:"system",message:`${lead.homeowner} indicated no adult will be present — booking paused`,badge:"blocked",badgeColor:C.red});
+            }
+
+            if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,result.reply,roofer.twilioFrom);
+            onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg:result.reply,ts:new Date().toLocaleString()}});
+
+            // Only ever auto-book once the adult-presence gate is actually satisfied.
+            const requireAdult=comm.requireAdultPresent!==false;
+            const gateOk=!requireAdult||result.adultConfirmed==="confirmed";
+            if(result.readyToSchedule&&gateOk&&lead.status!=="scheduled"){
+              const inspector=roofer.inspectors.find(i=>i.zones.includes(lead.zip))||roofer.inspectors[0];
+              const nextSlot=inspector?getNextAvailableSlots(roofer,inspector.id,{limit:1})[0]:null;
+              if(inspector&&nextSlot){
+                const ins={id:"ins"+Date.now(),client:lead.homeowner,address:lead.zip,phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
+                onUpdate("book_lead",{leadId:lead.id,rooferId:roofer.id,inspection:ins});
+                const bookMsg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:formatDateLabel(nextSlot.startISO),time:formatTimeLabel(nextSlot.startISO),inspector:inspector.name,company:roofer.name});
+                if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,bookMsg,roofer.twilioFrom);
+                onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg:bookMsg,ts:new Date().toLocaleString()}});
+                onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"booking",message:`AI booked: ${lead.homeowner} on ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)} (adult presence confirmed)`,smsText:`SkyShield Pro: AI booked an inspection — ${lead.homeowner} on ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)}. Adult presence confirmed.`}});
+                addActivity({type:"booking",message:`AI auto-booked ${lead.homeowner} — adult presence confirmed`,badge:"auto-booked",badgeColor:C.purple});
+              }
+            }
+
+            if(result.needsHumanReview){
+              onUpdate("update_lead_notes",{leadId:lead.id,notes:((lead.notes||"")+" ⚠ AI flagged this conversation for human review.").trim()});
+              addActivity({type:"system",message:`${lead.homeowner}'s conversation flagged for human review`,badge:"review",badgeColor:C.yellow});
+            }
+          }catch(e){ console.error("AI auto-reply failed:",e); }
         }
-      });
+      }
     }catch(e){}
     setFetchingTwilio(false);
   }
@@ -911,7 +1823,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
     const comm=roofer?.commSettings||DEFAULT_COMM;
     if(!isWithinCommWindow(comm)&&!window.confirm("Outside active hours. Send anyway?")) return;
     const msg=fillTemplate(comm.templates.initial,{name:lead.homeowner,zip:lead.zip,storm:lead.stormType,company:roofer?.name||"us"});
-    if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,msg);
+    if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer?.twilioFrom);
     onUpdate("lead_status",{leadId:lead.id,status:"contacted"});
     onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
     onUpdate("set_contacted_at",{leadId:lead.id,ts:new Date().toISOString().split("T")[0]});
@@ -921,19 +1833,24 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
   function bookLead(lead){
     const roofer=roofers.find(r=>r.id===lead.rooferId);
     const inspector=roofer?.inspectors.find(i=>i.zones.includes(lead.zip))||roofer?.inspectors[0];
-    const d=new Date();d.setDate(d.getDate()+2);
-    const dateStr=d.toISOString().split("T")[0];
-    const ins={id:"ins"+Date.now(),client:lead.homeowner,address:lead.zip,date:dateStr,time:"10:00 AM",inspector:inspector?.name||"TBD",status:"scheduled"};
-    onUpdate("book_lead",{leadId:lead.id,rooferId:lead.rooferId,inspection:ins});
+    if(!roofer||!inspector){ alert("This roofer has no inspectors set up yet — add one before booking."); return; }
     const comm=roofer?.commSettings||DEFAULT_COMM;
-    const msg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:dateStr,time:"10:00 AM",inspector:inspector?.name||"TBD",company:roofer?.name||"us"});
-    if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg);
+    if(comm.requireAdultPresent!==false&&lead.adultConfirmed!=="confirmed"){
+      if(!window.confirm(`${lead.homeowner} has not yet confirmed that an adult (18+) will be present during the inspection. Continue booking anyway?`)) return;
+    }
+    const nextSlot=getNextAvailableSlots(roofer,inspector.id,{limit:1})[0];
+    if(!nextSlot){ alert("No available slots found in the next 14 days for "+inspector.name+"."); return; }
+    const ins={id:"ins"+Date.now(),client:lead.homeowner,address:lead.zip,phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
+    onUpdate("book_lead",{leadId:lead.id,rooferId:lead.rooferId,inspection:ins});
+    const msg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:formatDateLabel(nextSlot.startISO),time:formatTimeLabel(nextSlot.startISO),inspector:inspector.name,company:roofer?.name||"us"});
+    if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer?.twilioFrom);
     onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
-    addActivity({type:"booking",message:`Inspection booked for ${lead.homeowner} on ${dateStr}`,badge:"booked",badgeColor:C.green});
+    addActivity({type:"booking",message:`Inspection booked for ${lead.homeowner} — ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)}`,badge:"booked",badgeColor:C.green});
+    onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"booking",message:`New inspection booked: ${lead.homeowner} on ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)} with ${inspector.name}`,smsText:`SkyShield Pro: New inspection booked — ${lead.homeowner} on ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)} with ${inspector.name}.`}});
   }
   function sendManualMessage(lead,msg){
     const roofer=roofers.find(r=>r.id===lead.rooferId);
-    if(apiKeys.twilio?.sid&&roofer) sendTwilioSMS(apiKeys.twilio,lead.phone,msg);
+    if(apiKeys.twilio?.sid&&roofer) sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer.twilioFrom);
     onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
   }
   function logRevenue(entry){
@@ -996,7 +1913,22 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
         </div>
         <div style={flex(8)}>
           <input value={manualZip} onChange={e=>setManualZip(e.target.value)} placeholder="Enter ZIP..." style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 12px",color:C.text,fontSize:13,outline:"none",width:130}}/>
-          <Btn variant="info" onClick={()=>{if(!manualZip.trim())return;const zip=manualZip.trim(),r=roofers.find(x=>x.territories.includes(zip));if(r){onUpdate("add_lead",{lead:{id:"l"+Date.now(),homeowner:"Storm Lead - "+zip,phone:"000-000-0000",zip,rooferId:r.id,stormType:"Manual",status:"pending",conversations:[],notes:"",contactedAt:null,followupSent:false}});addActivity({type:"lead",message:`Manual lead for ${r.name} in ZIP ${zip}`});alert("Lead created for "+r.name);}else alert("No roofer found for ZIP "+zip);setManualZip("");}}>+ Campaign</Btn>
+          <Btn variant="info" onClick={()=>{
+            if(!manualZip.trim())return;
+            const zip=manualZip.trim();
+            const eligible=roofers.filter(r=>r.status==="active"&&r.territories.includes(zip));
+            if(eligible.length===0){ alert("No active roofer covers ZIP "+zip); setManualZip(""); return; }
+            // Assign to whichever eligible roofer currently has the fewest pending leads in this ZIP (fairness)
+            const r=eligible.reduce((least,cur)=>{
+              const curPending=leads.filter(l=>l.rooferId===cur.id&&l.zip===zip&&l.status==="pending").length;
+              const leastPending=leads.filter(l=>l.rooferId===least.id&&l.zip===zip&&l.status==="pending").length;
+              return curPending<leastPending?cur:least;
+            },eligible[0]);
+            onUpdate("add_lead",{lead:{id:"l"+Date.now(),homeowner:randomDemoName(),phone:randomDemoPhone(),zip,rooferId:r.id,stormType:"Manual",status:"pending",conversations:[],notes:"",contactedAt:null,followupSent:false}});
+            addActivity({type:"lead",message:`Manual lead for ${r.name} in ZIP ${zip}`});
+            alert("Lead created for "+r.name);
+            setManualZip("");
+          }}>+ Campaign</Btn>
         </div>
       </div>
       <TableWrap headers={["Type","Location","ZIP","Severity","Date","Status","Action"]}>
@@ -1007,7 +1939,17 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           <TD><SeverityBadge severity={st.severity}/></TD>
           <TD dim>{st.date}</TD>
           <TD><Badge label={st.processed?"processed":"new"} color={st.processed?C.green:C.orange} small/></TD>
-          <TD>{!st.processed&&<Btn small variant="primary" onClick={()=>{const m=roofers.filter(r=>r.territories.includes(st.zip));m.forEach(r=>onUpdate("add_lead",{lead:{id:"l"+Date.now()+Math.random(),homeowner:"Storm Prospect "+st.zip,phone:"000-000-0000",zip:st.zip,rooferId:r.id,stormType:st.type,status:"pending",conversations:[],notes:"",contactedAt:null,followupSent:false}}));onUpdate("process_storm",{stormId:st.id});addActivity({type:"storm",message:`Storm ${st.location} processed — ${m.length} roofer(s) notified`,badge:`${m.length} roofers`,badgeColor:C.orange});alert(`Processed: ${m.length} roofer(s) notified.`);}}>Process</Btn>}</TD>
+          <TD>{!st.processed&&<Btn small variant="primary" onClick={()=>{
+            const eligible=roofers.filter(r=>r.status==="active"&&r.territories.includes(st.zip));
+            if(eligible.length===0){ alert("No active roofers cover ZIP "+st.zip+"."); return; }
+            const leadCount=Math.max(1,Math.min(eligible.length*3,12)); // demo volume, scales with coverage
+            const assignments=distributeLeadsRoundRobin(eligible,leadCount);
+            assignments.forEach(a=>onUpdate("add_lead",{lead:{id:"l"+Date.now()+Math.random(),homeowner:a.homeowner,phone:a.phone,zip:st.zip,rooferId:a.rooferId,stormType:st.type,status:"pending",conversations:[],notes:"",contactedAt:null,followupSent:false}}));
+            onUpdate("process_storm",{stormId:st.id});
+            const perRoofer=eligible.map(r=>`${r.name}: ${assignments.filter(a=>a.rooferId===r.id).length}`).join(", ");
+            addActivity({type:"storm",message:`Storm ${st.location} processed — ${assignments.length} lead(s) split across ${eligible.length} roofer(s)`,badge:`${eligible.length} roofers`,badgeColor:C.orange});
+            alert(`Processed: ${assignments.length} leads distributed.\n${perRoofer}\n\nEach homeowner was assigned to exactly one roofer — no duplicate outreach.`);
+          }}>Process</Btn>}</TD>
         </TR>)}
       </TableWrap>
       <StormMap storms={storms} roofers={roofers}/>
@@ -1015,11 +1957,29 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
 
     {tab==="Roofers"&&<div>
       <div style={{...flex(0,"center","flex-end"),marginBottom:14}}><Btn variant="primary" onClick={()=>setShowAddRoofer(true)}>+ Add Roofer</Btn></div>
+
+      <div style={{...card(),marginBottom:20}}>
+        <div style={{...flex(0,"center","space-between"),marginBottom:14}}>
+          <div style={T.head(13,600)}>📱 SMS Number Assignment <span style={{color:C.textMuted,fontWeight:400}}>(admin only)</span></div>
+          <Badge label={`${roofers.filter(r=>r.twilioFrom).length}/${roofers.length} assigned`} color={roofers.every(r=>r.twilioFrom)?C.green:C.yellow} small/>
+        </div>
+        <div style={{fontSize:12,color:C.textMuted,marginBottom:14,lineHeight:1.6}}>
+          Assign each roofer their own dedicated Twilio number from your account. Buy more numbers in your Twilio console under Phone Numbers → Buy a Number — they all share the Account SID/Token set in API Settings.
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {roofers.map(r=><QuickAssignRow key={r.id} roofer={r} onSave={(num)=>onUpdate("edit_roofer",{roofer:{...r,twilioFrom:num}})}/>)}
+        </div>
+      </div>
+
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
         {roofers.map(r=><div key={r.id} onClick={()=>onSelectRoofer(r)} style={{...card(),cursor:"pointer",transition:"all 0.15s"}} onMouseEnter={e=>{e.currentTarget.style.background=C.cardHov;e.currentTarget.style.borderColor=C.borderAct;}} onMouseLeave={e=>{e.currentTarget.style.background=C.card;e.currentTarget.style.borderColor=C.border;}}>
           <div style={{...flex(0,"center","space-between"),marginBottom:6}}>
             <div style={T.head(14,600)}>{r.name}</div>
-            <div style={flex(5)}><Badge label={r.plan} color={PLAN_COLORS[r.plan]} small/><StatusBadge status={r.status}/></div>
+            <div style={flex(5)}>
+              <Badge label={r.plan} color={PLAN_COLORS[r.plan]} small/>
+              <StatusBadge status={r.status}/>
+              {(r.notifications||[]).filter(n=>!n.read).length>0&&<Badge label={`🔔 ${(r.notifications||[]).filter(n=>!n.read).length}`} color={C.red} small/>}
+            </div>
           </div>
           <div style={{fontSize:12,color:C.textMuted,marginBottom:14}}>{r.owner} · {r.email}</div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:14,padding:"10px 0",borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`}}>
@@ -1028,6 +1988,9 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           <div style={{marginBottom:10}}>
             <div style={{...T.label,marginBottom:6}}>Territories</div>
             <div style={{...flex(5),flexWrap:"wrap"}}>{r.territories.map(z=><Badge key={z} label={z} color={C.blue} small/>)}</div>
+          </div>
+          <div style={{marginBottom:10,fontSize:11,color:r.twilioFrom?C.textMuted:C.yellow}}>
+            📱 {r.twilioFrom?`SMS from ${r.twilioFrom}`:"⚠ No dedicated Twilio number set"}
           </div>
           <div style={{...flex(6,"center","flex-end")}} onClick={e=>e.stopPropagation()}>
             <Btn small onClick={()=>setEditingRoofer(r)}>✏ Edit</Btn>
@@ -1105,7 +2068,7 @@ function Subscriptions({roofers,onUpdate}){
         <Input label="Email" value={iEmail} onChange={setIEmail} type="email" placeholder="owner@company.com"/>
         <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
           <Btn onClick={()=>setShowInvite(false)}>Cancel</Btn>
-          <Btn variant="primary" onClick={()=>{if(!iName||!iEmail)return;onUpdate("add_roofer",{roofer:{id:"r"+Date.now(),name:iName,owner:iName,email:iEmail,phone:"",plan:"Starter",status:"trial",territories:[],revenue:0,leads:0,booked:0,inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},pin:"0000"}});setShowInvite(false);setIEmail("");setIName("");alert(`Invite sent to ${iEmail}`);}}>Send Invite</Btn>
+          <Btn variant="primary" onClick={()=>{if(!iName||!iEmail)return;onUpdate("add_roofer",{roofer:{id:"r"+Date.now(),name:iName,owner:iName,email:iEmail,phone:"",plan:"Starter",status:"trial",territories:[],revenue:0,leads:0,booked:0,inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},scheduleSettings:{...DEFAULT_SCHEDULE},notifications:[],pin:"0000"}});setShowInvite(false);setIEmail("");setIName("");alert(`Invite sent to ${iEmail}`);}}>Send Invite</Btn>
         </div>
       </div>
     </Modal>}
@@ -1185,7 +2148,7 @@ function APISettings({apiKeys,onUpdate}){
 
   const services=[
     {id:"weather",name:"WeatherAPI.com",desc:"Storm alert scanning",link:"https://www.weatherapi.com/",fields:[{k:"weather",label:"API Key"}]},
-    {id:"twilio",name:"Twilio SMS",desc:"Outbound SMS + incoming reply polling",link:"https://www.twilio.com/",fields:[{k:"twilioSid",label:"Account SID"},{k:"twilioToken",label:"Auth Token",pw:true},{k:"twilioPhone",label:"From Phone Number"}]},
+    {id:"twilio",name:"Twilio SMS",desc:"Account credentials (shared) + default fallback number",link:"https://www.twilio.com/",fields:[{k:"twilioSid",label:"Account SID"},{k:"twilioToken",label:"Auth Token",pw:true},{k:"twilioPhone",label:"Default From Number (fallback)"}]},
     {id:"googleCal",name:"Google Calendar",desc:"Inspection scheduling sync",link:"https://console.cloud.google.com/",fields:[{k:"googleCalClientId",label:"Client ID"},{k:"googleCalClientSecret",label:"Client Secret",pw:true},{k:"googleCalRefreshToken",label:"Refresh Token",pw:true}]},
     {id:"attom",name:"ATTOM Property Data",desc:"Property data enrichment",link:"https://www.attomdata.com/",fields:[{k:"attom",label:"API Key"}]},
     {id:"stripe",name:"Stripe",desc:"Subscription billing",link:"https://dashboard.stripe.com/",fields:[{k:"stripePublishable",label:"Publishable Key"},{k:"stripeSecret",label:"Restricted Key",pw:true}]},
@@ -1213,20 +2176,214 @@ function APISettings({apiKeys,onUpdate}){
         {testResults[svc.id]&&<div style={{marginTop:8,padding:"6px 10px",borderRadius:5,fontSize:12,color:testResults[svc.id].startsWith("✓")?C.green:testResults[svc.id].startsWith("⚠")?C.yellow:C.red,background:testResults[svc.id].startsWith("✓")?C.greenDim:testResults[svc.id].startsWith("⚠")?C.yellowDim:C.redDim}}>{testResults[svc.id]}</div>}
       </div>)}
     </div>
+    <div style={{marginTop:20,padding:"14px 16px",background:C.blueDim,borderRadius:8,border:`1px solid ${C.blue}22`}}>
+      <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:6}}>📱 Per-Roofer SMS Numbers</div>
+      <div style={{fontSize:12,color:C.textSub,lineHeight:1.7}}>
+        Each roofer should have their own Twilio phone number so their texts come from a number leads recognize as that specific company — and so two roofers never appear to be texting from the same line. Set each roofer's number under <strong>Command Center → Roofers → Edit</strong>. Buy additional numbers from the same Twilio account under <strong>Phone Numbers → Buy a Number</strong> in your Twilio console; they'll all share the Account SID and Auth Token configured above. If a roofer has no number set, messages fall back to the default number above.
+      </div>
+    </div>
   </div>;
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App(){
-  const[roofers,setRoofers]=useState(INIT_ROOFERS);
-  const[leads,setLeads]=useState(INIT_LEADS);
-  const[storms,setStorms]=useState(INIT_STORMS);
+  const[roofers,setRoofers]=useState([]);
+  const[leads,setLeads]=useState([]);
+  const[storms,setStorms]=useState([]);
   const[apiKeys,setApiKeys]=useState({});
   const[activeSection,setActiveSection]=useState("Command Center");
   const[selectedRoofer,setSelectedRoofer]=useState(null);
   const[scanSettings,setScanSettings]=useState({interval:"daily",startTime:"07:00",lastScan:null});
   const[activities,setActivities]=useState([{type:"system",message:"SkyShield Pro initialized and ready.",ts:new Date().toLocaleString(),badge:"ready",badgeColor:C.green}]);
-  const[auth,setAuth]=useState({loggedIn:false,role:null,roofer:null});
+  const[auth,setAuth]=useState({loggedIn:false,role:null,roofer:null,session:null});
+  const[resetToken,setResetToken]=useState(null);
+  const[checkingSession,setCheckingSession]=useState(true);
+  const[dataLoaded,setDataLoaded]=useState(false);
+  const[dataLoadError,setDataLoadError]=useState(null);
+  const[showWhatsNew,setShowWhatsNew]=useState(false);
+
+  // Detect Supabase password-recovery link (#access_token=...&type=recovery),
+  // then attempt to restore a previous session from persistent storage so the
+  // user doesn't have to log in again every time they refresh the page.
+  useEffect(()=>{
+    (async()=>{
+      const hash=window.location.hash;
+      if(hash&&hash.includes("type=recovery")){
+        const params=new URLSearchParams(hash.startsWith("#")?hash.slice(1):hash);
+        const token=params.get("access_token");
+        if(token){ setResetToken(token); setCheckingSession(false); return; }
+      }
+
+      try{
+        const stored=await window.storage.get("skyshield_refresh_token");
+        const refreshToken=stored?.value;
+        if(refreshToken){
+          const sessionData=await supabaseRefreshSession(refreshToken);
+          if(sessionData?.access_token){
+            handleLoginSuccess(sessionData, true);
+            setCheckingSession(false);
+            return;
+          }
+        }
+      }catch(e){
+        // No stored session, or it's expired/invalid — fall through to login screen.
+      }
+      setCheckingSession(false);
+    })();
+  },[]);
+
+  // Once logged in, load real data from Supabase. Replaces the demo data
+  // entirely — this is what makes roofers/leads/etc survive page reloads
+  // and code deploys instead of resetting every time.
+  useEffect(()=>{
+    if(!auth.loggedIn) return;
+    let cancelled=false;
+    (async()=>{
+      try{
+        const data=await loadAllData();
+        if(cancelled) return;
+        setRoofers(data.roofers);
+        setLeads(data.leads);
+        setStorms(data.storms);
+        setActivities(data.activities.length>0?data.activities:[{type:"system",message:"SkyShield Pro initialized and ready.",ts:new Date().toLocaleString(),badge:"ready",badgeColor:C.green}]);
+        setScanSettings(data.scanSettings);
+        setApiKeys(data.apiKeys);
+        // Show "What's New" if the user hasn't seen this version yet
+        if((data.lastSeenVersion||"0.0.0")!==APP_VERSION) setShowWhatsNew(true);
+        setDataLoaded(true);
+      }catch(e){
+        console.error("Failed to load data from Supabase:",e);
+        setDataLoadError(e.message);
+        setDataLoaded(true); // proceed with whatever local state exists rather than blocking the app
+      }
+    })();
+    return()=>{cancelled=true;};
+  },[auth.loggedIn]);
+
+  // Debounced auto-save: whenever roofers/leads/storms/activities/scanSettings/
+  // apiKeys change, persist the changed records to Supabase shortly after.
+  // Debouncing avoids hammering the database on every keystroke in a text field.
+  const saveTimers=useRef({});
+  function debouncedSave(key,fn,delay=800){
+    clearTimeout(saveTimers.current[key]);
+    saveTimers.current[key]=setTimeout(fn,delay);
+  }
+
+  const prevRoofers=useRef(roofers);
+  useEffect(()=>{
+    if(!dataLoaded) return;
+    const prev=prevRoofers.current;
+    prevRoofers.current=roofers;
+    // Save any roofer whose record changed since the last render.
+    roofers.forEach(r=>{
+      const before=prev.find(p=>p.id===r.id);
+      if(!before||JSON.stringify(before)!==JSON.stringify(r)){
+        debouncedSave("roofer:"+r.id, ()=>saveRoofer(r));
+      }
+    });
+    // Detect deletions: roofer existed before but not now.
+    prev.forEach(p=>{
+      if(!roofers.some(r=>r.id===p.id)) deleteRooferRow(p.id);
+    });
+  },[roofers,dataLoaded]);
+
+  const prevLeads=useRef(leads);
+  useEffect(()=>{
+    if(!dataLoaded) return;
+    const prev=prevLeads.current;
+    prevLeads.current=leads;
+    leads.forEach(l=>{
+      const before=prev.find(p=>p.id===l.id);
+      if(!before||JSON.stringify(before)!==JSON.stringify(l)){
+        debouncedSave("lead:"+l.id, ()=>saveLead(l));
+      }
+    });
+    prev.forEach(p=>{
+      if(!leads.some(l=>l.id===p.id)) deleteLeadRow(p.id);
+    });
+  },[leads,dataLoaded]);
+
+  const prevStorms=useRef(storms);
+  useEffect(()=>{
+    if(!dataLoaded) return;
+    const prev=prevStorms.current;
+    prevStorms.current=storms;
+    storms.forEach(s=>{
+      const before=prev.find(p=>p.id===s.id);
+      if(!before||JSON.stringify(before)!==JSON.stringify(s)){
+        debouncedSave("storm:"+s.id, ()=>saveStorm(s));
+      }
+    });
+  },[storms,dataLoaded]);
+
+  useEffect(()=>{
+    if(!dataLoaded) return;
+    debouncedSave("appstate", ()=>saveAppState({ activities, scan_settings:scanSettings, api_keys:apiKeys }));
+  },[activities,scanSettings,apiKeys,dataLoaded]);
+
+  // Determine role from email: configure your admin email(s) here
+  const ADMIN_EMAILS=["noah.arkdynamics@gmail.com"];
+
+  function handleLoginSuccess(sessionData, isRestoring){
+    setCurrentAccessToken(sessionData.access_token);
+    // Persist the refresh token so the session survives a page reload.
+    // Stored via the artifact's persistent key-value storage (not
+    // localStorage/sessionStorage, which aren't supported here).
+    if(sessionData.refresh_token){
+      window.storage.set("skyshield_refresh_token", sessionData.refresh_token).catch(()=>{});
+    }
+    const email=sessionData.user?.email||"";
+    const isAdmin=ADMIN_EMAILS.includes(email.toLowerCase());
+    if(isAdmin){
+      setAuth({loggedIn:true,role:"admin",roofer:null,session:sessionData});
+    } else {
+      // Match roofer by email. On a fresh login, `roofers` is already loaded
+      // by this point. On session restoration (page refresh), `roofers` may
+      // still be empty — store the email so a follow-up effect can re-match
+      // once roofer data finishes loading from Supabase.
+      const matched=roofers.find(r=>r.email?.toLowerCase()===email.toLowerCase());
+      if(matched){
+        setAuth({loggedIn:true,role:"roofer",roofer:matched,session:sessionData});
+        setSelectedRoofer(matched);
+        setActiveSection("Roofer Dashboard");
+      } else if(isRestoring){
+        // Defer final roofer assignment until data loads; mark as pending.
+        setAuth({loggedIn:true,role:"roofer",roofer:{id:sessionData.user.id,email,name:email,owner:email,phone:"",plan:"Starter",status:"trial",territories:[],revenue:0,leads:0,booked:0,inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},scheduleSettings:{...DEFAULT_SCHEDULE},notifications:[]},session:sessionData,pendingMatch:true});
+      } else {
+        setAuth({loggedIn:true,role:"roofer",roofer:{id:sessionData.user.id,name:email,owner:email,email,phone:"",plan:"Starter",status:"trial",territories:[],revenue:0,leads:0,booked:0,inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},scheduleSettings:{...DEFAULT_SCHEDULE},notifications:[]},session:sessionData});
+      }
+    }
+  }
+
+  // Once roofer data finishes loading after a restored session, re-match the
+  // logged-in roofer by email in case the initial match (during restoration,
+  // before data was loaded) used a placeholder record.
+  useEffect(()=>{
+    if(!dataLoaded||!auth.loggedIn||auth.role!=="roofer"||!auth.pendingMatch) return;
+    const email=auth.roofer?.email?.toLowerCase();
+    const matched=roofers.find(r=>r.email?.toLowerCase()===email);
+    if(matched){
+      setAuth(p=>({...p,roofer:matched,pendingMatch:false}));
+      setSelectedRoofer(matched);
+      setActiveSection("Roofer Dashboard");
+    } else {
+      setAuth(p=>({...p,pendingMatch:false}));
+    }
+  },[dataLoaded,roofers]);
+
+  function dismissWhatsNew(){
+    setShowWhatsNew(false);
+    saveAppState({last_seen_version:APP_VERSION});
+  }
+
+  function handleSignOut(){
+    setCurrentAccessToken(null);
+    window.storage.delete("skyshield_refresh_token").catch(()=>{});
+    setAuth({loggedIn:false,role:null,roofer:null,session:null});
+    setSelectedRoofer(null);
+    setActiveSection("Command Center");
+    setDataLoaded(false);
+  }
 
   // Load Leaflet map library
   useEffect(()=>{
@@ -1240,12 +2397,25 @@ export default function App(){
   function handleUpdate(action,payload){
     switch(action){
       case "add_roofer":setRoofers(p=>[...p,payload.roofer]);break;
+      case "notify_roofer":
+        setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,notifications:[{id:"n"+Date.now()+Math.random(),...payload.notification,read:false,ts:new Date().toLocaleString()},...(r.notifications||[])].slice(0,50)}:r));
+        setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,notifications:[{id:"n"+Date.now()+Math.random(),...payload.notification,read:false,ts:new Date().toLocaleString()},...(p.notifications||[])].slice(0,50)}:p);
+        if(apiKeys.twilio?.sid){
+          const roofer=roofers.find(r=>r.id===payload.rooferId);
+          if(roofer?.phone) sendTwilioSMS(apiKeys.twilio,roofer.phone,payload.notification.smsText||payload.notification.message,roofer.twilioFrom).catch(()=>{});
+        }
+        break;
+      case "mark_notifications_read":
+        setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,notifications:(r.notifications||[]).map(n=>({...n,read:true}))}:r));
+        setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,notifications:(p.notifications||[]).map(n=>({...n,read:true}))}:p);
+        break;
       case "add_lead":setLeads(p=>[...p,payload.lead]);setRoofers(p=>p.map(r=>r.id===payload.lead.rooferId?{...r,leads:r.leads+1}:r));addActivity({type:"lead",message:`New lead: ${payload.lead.homeowner} (${payload.lead.zip})`});break;
       case "add_storm":if(!storms.some(s=>s.zip===payload.storm.zip&&s.date===payload.storm.date)){setStorms(p=>[...p,payload.storm]);addActivity({type:"storm",message:`Storm detected: ${payload.storm.type} in ${payload.storm.location}`,badge:payload.storm.severity,badgeColor:{extreme:C.red,severe:C.orange,moderate:C.yellow}[payload.storm.severity]||C.blue});}break;
       case "process_storm":setStorms(p=>p.map(s=>s.id===payload.stormId?{...s,processed:true}:s));break;
       case "lead_status":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,status:payload.status}:l));break;
       case "add_conversation":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,conversations:[...(l.conversations||[]),payload.entry]}:l));break;
       case "update_lead_notes":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,notes:payload.notes}:l));break;
+      case "update_adult_confirmed":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,adultConfirmed:payload.status}:l));break;
       case "set_contacted_at":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,contactedAt:payload.ts}:l));break;
       case "mark_followup_sent":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,followupSent:true}:l));break;
       case "book_lead":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,status:"scheduled"}:l));setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,booked:r.booked+1,inspections:[...r.inspections,payload.inspection]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,booked:p.booked+1,inspections:[...p.inspections,payload.inspection]}:p);break;
@@ -1253,6 +2423,8 @@ export default function App(){
       case "update_inspection_status":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:r.inspections.map(i=>i.id===payload.inspectionId?{...i,status:payload.status}:i)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:p.inspections.map(i=>i.id===payload.inspectionId?{...i,status:payload.status}:i)}:p);break;
       case "add_inspector":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspectors:[...r.inspectors,payload.inspector]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspectors:[...p.inspectors,payload.inspector]}:p);break;
       case "add_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:[...r.inspections,payload.inspection]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:[...p.inspections,payload.inspection]}:p);break;
+      case "reschedule_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:r.inspections.map(i=>i.id===payload.inspection.id?{...i,...payload.inspection}:i)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:p.inspections.map(i=>i.id===payload.inspection.id?{...i,...payload.inspection}:i)}:p);break;
+      case "update_schedule_settings":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,scheduleSettings:payload.settings}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,scheduleSettings:payload.settings}:p);break;
       case "add_territory":setRoofers(p=>p.map(r=>r.id===payload.rooferId&&!r.territories.includes(payload.zip)?{...r,territories:[...r.territories,payload.zip]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId&&!p.territories.includes(payload.zip)?{...p,territories:[...p.territories,payload.zip]}:p);break;
       case "remove_territory":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,territories:r.territories.filter(z=>z!==payload.zip)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,territories:p.territories.filter(z=>z!==payload.zip)}:p);break;
       case "update_roofer_plan":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,plan:payload.plan}:r));break;
@@ -1271,22 +2443,35 @@ export default function App(){
 
   // ── NAV CONFIG ────────────────────────────────────────────────────────────
   const navSections=["Command Center","Subscriptions & Billing","API Settings"];
-  const navStyle=(active)=>({background:"none",border:"none",cursor:"pointer",padding:"6px 12px",borderRadius:6,fontSize:13,fontWeight:500,color:active?C.orange:C.textSub,background:active?C.orangeDim:"transparent"});
+  const navStyle=(active)=>({border:"none",cursor:"pointer",padding:"6px 12px",borderRadius:6,fontSize:13,fontWeight:500,color:active?C.orange:C.textSub,background:active?C.orangeDim:"transparent"});
+
+  // ── SHOW RESET PASSWORD SCREEN (from email link) ──────────────────────────
+  if(resetToken) return <><FontLoader/><ResetPasswordScreen accessToken={resetToken} onDone={()=>{setResetToken(null);window.location.hash="";}}/></>;
 
   // ── SHOW LOGIN ─────────────────────────────────────────────────────────────
-  if(!auth.loggedIn) return <><FontLoader/><LoginScreen roofers={roofers} onAdminLogin={()=>setAuth({loggedIn:true,role:"admin",roofer:null})} onRooferLogin={r=>{setAuth({loggedIn:true,role:"roofer",roofer:r});selectRoofer(r);}}/></>;
+  if(checkingSession) return <><FontLoader/><div style={{minHeight:"100vh",background:C.bg}}/></>;
+  if(!auth.loggedIn) return <><FontLoader/><LoginScreen onLoginSuccess={handleLoginSuccess}/></>;
+
+  // ── LOADING DATA FROM SUPABASE ─────────────────────────────────────────────
+  if(!dataLoaded) return <><FontLoader/><div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+    <div style={{textAlign:"center"}}>
+      <div style={{width:40,height:40,borderRadius:10,background:"linear-gradient(135deg,#0d9488,#0284c7)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,margin:"0 auto 14px"}}>⛈</div>
+      <div style={{fontSize:13,color:C.textMuted}}>Loading your data...</div>
+    </div>
+  </div></>;
 
   // ── ROOFER VIEW ────────────────────────────────────────────────────────────
   if(auth.role==="roofer"){
     const live=roofers.find(r=>r.id===auth.roofer.id)||auth.roofer;
-    return <div style={{minHeight:"100vh",background:C.bg}}><FontLoader/>
+    return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)"}}><FontLoader/>
+      {showWhatsNew&&<WhatsNewModal onDismiss={dismissWhatsNew}/>}
       <nav style={{position:"sticky",top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 20px"}}>
         <div style={{maxWidth:1300,margin:"0 auto",...flex(0,"center","space-between"),height:54}}>
           <div style={flex(10)}>
-            <div style={{width:30,height:30,borderRadius:8,background:`linear-gradient(135deg,${C.orange},#c0392b)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>⛈</div>
+            <div style={{width:30,height:30,borderRadius:8,background:`linear-gradient(135deg,#0d9488,#0284c7)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>⛈</div>
             <div><div style={T.head(14,700)}>Sky<span style={{color:C.orange}}>Shield</span> Pro</div><div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.08em"}}>Ark Dynamics</div></div>
           </div>
-          <div style={flex(10)}><span style={{fontSize:13,color:C.textSub,fontWeight:500}}>{live.name}</span><Badge label={live.plan} color={PLAN_COLORS[live.plan]} small/><Btn small variant="ghost" onClick={()=>setAuth({loggedIn:false,role:null,roofer:null})}>Sign Out</Btn></div>
+          <div style={flex(10)}><span style={{fontSize:13,color:C.textSub,fontWeight:500}}>{live.name}</span><Badge label={live.plan} color={PLAN_COLORS[live.plan]} small/><NotificationBell roofer={live} onMarkRead={()=>handleUpdate("mark_notifications_read",{rooferId:live.id})}/><Btn small variant="ghost" onClick={handleSignOut}>Sign Out</Btn></div>
         </div>
       </nav>
       <main style={{maxWidth:1300,margin:"0 auto",padding:"24px 20px"}}>
@@ -1297,13 +2482,14 @@ export default function App(){
   }
 
   // ── ADMIN VIEW ─────────────────────────────────────────────────────────────
-  return <div style={{minHeight:"100vh",background:C.bg}}><FontLoader/>
+  return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)"}}><FontLoader/>
+      {showWhatsNew&&<WhatsNewModal onDismiss={dismissWhatsNew}/>}
     <nav style={{position:"sticky",top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 20px"}}>
       <div style={{maxWidth:1300,margin:"0 auto",...flex(0,"center","space-between"),height:54}}>
 
         {/* Logo */}
         <div style={flex(10)}>
-          <div style={{width:32,height:32,borderRadius:8,background:`linear-gradient(135deg,${C.orange},#c0392b)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>⛈</div>
+          <div style={{width:32,height:32,borderRadius:8,background:"linear-gradient(135deg,#0d9488,#0284c7)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>⛈</div>
           <div>
             <div style={T.head(15,700)}>Sky<span style={{color:C.orange}}>Shield</span> Pro</div>
             <div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.08em",marginTop:1}}>Powered by Ark Dynamics</div>
@@ -1323,10 +2509,11 @@ export default function App(){
 
         {/* Status + sign out */}
         <div style={flex(12)}>
+          {dataLoadError&&<Badge label="⚠ Sync error" color={C.red} small/>}
           <div style={{...flex(5),fontSize:12,color:C.textMuted}}><span style={{color:C.green,fontSize:8}}>●</span>{roofers.filter(r=>r.status==="active").length} active</div>
           <div style={{...flex(5),fontSize:12,color:C.textMuted}}><span style={{color:C.orange,fontSize:8}}>●</span>{leads.filter(l=>l.status==="pending").length} pending</div>
           {scanSettings.interval!=="manual"&&<div style={{...flex(5),fontSize:12,color:C.textMuted}}><span style={{color:C.blue,fontSize:8}}>●</span>auto-scan</div>}
-          <Btn small variant="ghost" onClick={()=>setAuth({loggedIn:false,role:null,roofer:null})}>Sign Out</Btn>
+          <Btn small variant="ghost" onClick={handleSignOut}>Sign Out</Btn>
         </div>
       </div>
     </nav>
