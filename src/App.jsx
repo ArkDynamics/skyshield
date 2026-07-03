@@ -251,9 +251,9 @@ const C = {
   purpleDim:"rgba(129,140,248,0.12)",
 
   // Text
-  text:     "#e2f8f8",
-  textSub:  "#5a9ab0",
-  textMuted:"rgba(100,200,220,0.28)",
+  text:     "#ffffff",
+  textSub:  "#a0c4d0",
+  textMuted:"rgba(160,196,208,0.4)",
 };
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -648,7 +648,7 @@ async function getGCalAccessToken(creds){
 }
 
 // ─── ACTIVITY FEED ────────────────────────────────────────────────────────────
-const ACT_ICONS={storm:"⛈",lead:"👤",sms:"💬",booking:"📅",revenue:"💰",roofer:"🏢",system:"⚙",followup:"🔄"};
+const ACT_ICONS={storm:"◆",lead:"◈",sms:"→",booking:"▦",revenue:"$",roofer:"◈",system:"◆",followup:"↺"};
 function ActivityFeed({activities}){
   if(!activities.length) return <div style={{padding:28,textAlign:"center",color:C.textMuted,fontSize:13}}>No activity recorded yet.</div>;
   return <div>{activities.slice(0,60).map((a,i)=>(
@@ -686,7 +686,7 @@ function NotificationBell({roofer,onMarkRead}){
 
   return <div ref={ref} style={{position:"relative"}}>
     <button onClick={toggle} style={{background:"none",border:"none",cursor:"pointer",position:"relative",padding:"6px",fontSize:18,lineHeight:1,color:C.textSub}}>
-      🔔
+      ◉
       {unreadCount>0&&<span style={{position:"absolute",top:0,right:0,background:C.red,color:"#fff",borderRadius:"50%",minWidth:16,height:16,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,padding:"0 3px"}}>{unreadCount>9?"9+":unreadCount}</span>}
     </button>
     {open&&<div style={{position:"absolute",top:"calc(100% + 8px)",right:0,width:320,maxHeight:380,overflowY:"auto",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 16px 40px rgba(0,0,0,0.5)",zIndex:200}}>
@@ -859,7 +859,7 @@ Explain features clearly. If they ask how to do something, walk them through it 
               background:"linear-gradient(135deg,#0d9488,#0284c7)",
               display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,
               boxShadow:"0 4px 12px rgba(13,148,136,0.4)",
-            }}>🤖</div>
+            }}>✦</div>
             <div>
               <div style={{fontSize:13,fontWeight:700,color:C.text}}>SkyShield Assistant</div>
               <div style={{fontSize:10,color:C.textSub}}>Powered by Claude · Always here to help</div>
@@ -948,7 +948,7 @@ Explain features clearly. If they ask how to do something, walk them through it 
         onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
         onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
       >
-        {open?"✕":"🤖"}
+        {open?"✕":"✦"}
         {/* Unread badge */}
         {!open&&unread>0&&<div style={{
           position:"absolute",top:0,right:0,
@@ -1006,11 +1006,11 @@ Always explain in plain English first, then include action blocks. Ask for clari
 
   return <div style={{display:"flex",flexDirection:"column",height:500,...card()}}>
     <div style={{marginBottom:10,padding:"8px 12px",background:C.greenDim,borderRadius:6,fontSize:12,color:C.green,border:`1px solid ${C.green}22`}}>
-      🤖 AI Agent active — type commands like "Add Blue Sky Roofing in ZIP 75001 on Pro plan" or "Delete Tom Wiley's lead"
+      AI Agent active — type commands like "Add Blue Sky Roofing in ZIP 75001 on Pro plan" or "Delete Tom Wiley's lead"
     </div>
     <div style={{flex:1,overflow:"auto",display:"flex",flexDirection:"column",gap:8,padding:2,marginBottom:12}}>
       {msgs.length===0&&<div style={{textAlign:"center",color:C.textMuted,padding:40,fontSize:13,lineHeight:1.7}}>
-        <div style={{fontSize:28,marginBottom:12}}>🤖</div>
+        <div style={{fontSize:28,marginBottom:12}}>✦</div>
         Try: <strong>"Show all pending leads"</strong> · <strong>"Add a roofer"</strong> · <strong>"Change Apex plan to Elite"</strong>
       </div>}
       {msgs.map((m,i)=><div key={i} style={{padding:"10px 14px",borderRadius:8,fontSize:13,lineHeight:1.6,background:m.role==="user"?C.orangeDim:C.surface,border:`1px solid ${m.role==="user"?C.orange+"33":C.border}`,alignSelf:m.role==="user"?"flex-end":"flex-start",maxWidth:"85%",whiteSpace:"pre-wrap"}}>{m.content}</div>)}
@@ -1104,7 +1104,7 @@ function CommSettingsPanel({roofer,onSave}){
       </div>
     </div>
     <div style={card()}>
-      <div style={{...T.head(14,600),marginBottom:6}}>📝 Message Templates</div>
+      <div style={{...T.head(14,600),marginBottom:6}}>Message Templates</div>
       <div style={{fontSize:12,color:C.textMuted,marginBottom:14}}>Variables: {"{{name}}"} {"{{zip}}"} {"{{storm}}"} {"{{company}}"} {"{{date}}"} {"{{time}}"} {"{{inspector}}"}</div>
       <div style={{display:"flex",flexDirection:"column",gap:14}}>
         <Textarea label="Initial Outreach" value={cfg.templates.initial} onChange={ft("initial")} rows={3}/>
@@ -1113,7 +1113,7 @@ function CommSettingsPanel({roofer,onSave}){
       </div>
     </div>
     <div style={card()}>
-      <div style={{...T.head(14,600),marginBottom:6}}>🤖 AI Auto-Reply &amp; Safety</div>
+      <div style={{...T.head(14,600),marginBottom:6}}>AI Auto-Reply & Safety</div>
       <div style={{fontSize:12,color:C.textMuted,marginBottom:14,lineHeight:1.6}}>When enabled, incoming lead text replies are answered automatically by AI instead of waiting for you to respond manually.</div>
 
       <div style={{...flex(10,"center","space-between"),padding:"10px 12px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:10}}>
@@ -1672,7 +1672,7 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
   const roofer=roofers.find(r=>r.id===lead.rooferId);
   const unread=(lead.conversations||[]).filter(c=>c.role==="lead").length;
   return <TR>
-    <TD bold sub={lead.notes?"📝 "+lead.notes.slice(0,50)+(lead.notes.length>50?"...":""):undefined}>{lead.homeowner}</TD>
+    <TD bold sub={lead.notes?"↳ "+lead.notes.slice(0,50)+(lead.notes.length>50?"...":""):undefined}>{lead.homeowner}</TD>
     <TD dim>{lead.phone}</TD>
     <TD>{lead.zip}</TD>
     {showRoofer&&<TD dim>{roofer?.name||"—"}</TD>}
@@ -1681,13 +1681,13 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
     <TD nowrap>
       <div style={{...flex(4),flexWrap:"wrap"}}>
         <button onClick={()=>onViewConvo(lead)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,position:"relative",padding:"3px 5px",lineHeight:1}}>
-          💬{unread>0&&<span style={{position:"absolute",top:-2,right:-2,background:C.orange,color:"#fff",borderRadius:"50%",width:13,height:13,fontSize:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{unread}</span>}
+          ⌥{unread>0&&<span style={{position:"absolute",top:-2,right:-2,background:C.orange,color:"#fff",borderRadius:"50%",width:13,height:13,fontSize:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{unread}</span>}
         </button>
         {lead.status==="pending"&&<Btn small variant="info" onClick={()=>onSMS(lead)}>SMS</Btn>}
         {lead.status==="contacted"&&<Btn small variant="success" onClick={()=>onBook(lead)}>Book</Btn>}
-        {lead.status==="scheduled"&&<Btn small variant="purple" onClick={()=>onLogRevenue(lead)}>💰 Won</Btn>}
-        <Btn small variant="default" onClick={()=>onEdit(lead)}>✏</Btn>
-        <Btn small variant="danger" onClick={()=>{if(window.confirm("Delete this lead?"))onDelete(lead);}}>🗑</Btn>
+        {lead.status==="scheduled"&&<Btn small variant="purple" onClick={()=>onLogRevenue(lead)}>Won</Btn>}
+        <Btn small variant="default" onClick={()=>onEdit(lead)}>Edit</Btn>
+        <Btn small variant="danger" onClick={()=>{if(window.confirm("Delete this lead?"))onDelete(lead);}}>✕</Btn>
       </div>
     </TD>
   </TR>;
@@ -1779,10 +1779,10 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
 
     {tab==="Overview"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12}}>
-        <StatCard label="Total Leads" value={myLeads.length} color={C.orange} icon="👥"/>
-        <StatCard label="Booked" value={scheduled.length} color={C.blue} icon="📅"/>
+        <StatCard label="Total Leads" value={myLeads.length} color={C.orange} icon="◈"/>
+        <StatCard label="Booked" value={scheduled.length} color={C.blue} icon="▦"/>
         <StatCard label="Won Jobs" value={won.length} color={C.green} icon="✅"/>
-        <StatCard label="Revenue" value={`$${roofer.revenue.toLocaleString()}`} color={C.purple} icon="💰"/>
+        <StatCard label="Revenue" value={`$${roofer.revenue.toLocaleString()}`} color={C.purple} icon="$"/>
         <StatCard label="Conv. Rate" value={`${myLeads.length>0?Math.round(won.length/myLeads.length*100):0}%`} color={C.yellow} icon="📈"/>
       </div>
       <div style={grid("1fr 1fr",16)}>
@@ -1851,7 +1851,7 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
                   {INSPECTION_STATUSES.map(st=><option key={st} value={st}>{st}</option>)}
                 </select>
                 {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>setBookingModal({existingInspection:ins})}>↻ Reschedule</Btn>}
-                <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer"><Btn small variant="ghost">📅 Add to Google Cal</Btn></a>
+                <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer"><Btn small variant="ghost">Add to Google Cal</Btn></a>
               </div>
             </div>
           </div>
@@ -1863,7 +1863,7 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
 
     {tab==="Revenue"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12}}>
-        <StatCard label="Total Revenue" value={`$${roofer.revenue.toLocaleString()}`} color={C.green} icon="💰"/>
+        <StatCard label="Total Revenue" value={`$${roofer.revenue.toLocaleString()}`} color={C.green} icon="$"/>
         <StatCard label="Won Jobs" value={won.length} color={C.purple} icon="✅"/>
         <StatCard label="Avg Job Value" value={roofer.revenueLog?.length?`$${Math.round(roofer.revenueLog.reduce((s,r)=>s+r.amount,0)/roofer.revenueLog.length).toLocaleString()}`:"—"} color={C.orange} icon="📊"/>
       </div>
@@ -1873,7 +1873,7 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
           <span style={T.head(13,600)}>Revenue Log</span>
           <Btn small onClick={()=>{const csv="Homeowner,Amount,Date,Note\n"+(roofer.revenueLog||[]).map(r=>`"${r.homeowner}",$${r.amount},"${r.date}","${r.note||""}"`).join("\n");const b=new Blob([csv],{type:"text/csv"}),u=URL.createObjectURL(b),a=document.createElement("a");a.href=u;a.download=roofer.name+"-revenue.csv";a.click();}}>⬇ Export CSV</Btn>
         </div>
-        <TableWrap headers={["Homeowner","Amount","Date","Note"]} empty={(!roofer.revenueLog||roofer.revenueLog.length===0)?"No revenue logged yet. Use the 💰 Won button on a scheduled lead.":undefined}>
+        <TableWrap headers={["Homeowner","Amount","Date","Note"]} empty={(!roofer.revenueLog||roofer.revenueLog.length===0)?"No revenue logged yet. Use the Won button on a scheduled lead.":undefined}>
           {(roofer.revenueLog||[]).map(r=><TR key={r.id}>
             <TD bold>{r.homeowner}</TD>
             <TD style={{color:C.green,fontWeight:700}}>${r.amount.toLocaleString()}</TD>
@@ -2126,10 +2126,10 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
 
     {tab==="Overview"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12}}>
-        <StatCard label="Monthly Revenue" value={`$${totalMRR.toLocaleString()}`} color={C.green} icon="💰"/>
-        <StatCard label="Active Clients" value={roofers.filter(r=>r.status==="active").length} color={C.orange} icon="🏢"/>
-        <StatCard label="Total Leads" value={leads.length} color={C.blue} icon="👥"/>
-        <StatCard label="Inspections" value={leads.filter(l=>l.status==="scheduled").length} color={C.purple} icon="📅"/>
+        <StatCard label="Monthly Revenue" value={`$${totalMRR.toLocaleString()}`} color={C.green} icon="$"/>
+        <StatCard label="Active Clients" value={roofers.filter(r=>r.status==="active").length} color={C.orange} icon="◈"/>
+        <StatCard label="Total Leads" value={leads.length} color={C.blue} icon="◈"/>
+        <StatCard label="Inspections" value={leads.filter(l=>l.status==="scheduled").length} color={C.purple} icon="▦"/>
         <StatCard label="Storms" value={storms.length} color={C.red} icon="⛈"/>
       </div>
       <ScanScheduler scanSettings={scanSettings} onChange={onScanSettingsChange}/>
@@ -2143,7 +2143,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           {storms.length===0&&<div style={{color:C.textMuted,fontSize:13}}>No storms detected yet.</div>}
         </div>
         <div style={card()}>
-          <div style={{...T.head(13,600),marginBottom:14}}>🏢 Roofer Performance</div>
+          <div style={{...T.head(13,600),marginBottom:14}}>Roofer Performance</div>
           {roofers.map(r=><div key={r.id} onClick={()=>onSelectRoofer(r)} style={{...flex(12,"center","space-between"),padding:"9px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=C.cardHov} onMouseLeave={e=>e.currentTarget.style.background=""}>
             <div><div style={{fontSize:13,fontWeight:500}}>{r.name}</div><div style={{fontSize:11,color:C.textMuted,marginTop:2}}>{r.leads} leads · {r.booked} booked · ${(r.revenue/1000).toFixed(0)}k</div></div>
             <div style={flex(6)}><Badge label={r.plan} color={PLAN_COLORS[r.plan]} small/><StatusBadge status={r.status}/></div>
@@ -2231,7 +2231,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
             <div style={flex(5)}>
               <Badge label={r.plan} color={PLAN_COLORS[r.plan]} small/>
               <StatusBadge status={r.status}/>
-              {(r.notifications||[]).filter(n=>!n.read).length>0&&<Badge label={`🔔 ${(r.notifications||[]).filter(n=>!n.read).length}`} color={C.red} small/>}
+              {(r.notifications||[]).filter(n=>!n.read).length>0&&<Badge label={`${(r.notifications||[]).filter(n=>!n.read).length}`} color={C.red} small/>}
             </div>
           </div>
           <div style={{fontSize:12,color:C.textMuted,marginBottom:14}}>{r.owner} · {r.email}</div>
@@ -2246,8 +2246,8 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
             📱 {r.twilioFrom?`SMS from ${r.twilioFrom}`:"⚠ No dedicated Twilio number set"}
           </div>
           <div style={{...flex(6,"center","flex-end")}} onClick={e=>e.stopPropagation()}>
-            <Btn small onClick={()=>setEditingRoofer(r)}>✏ Edit</Btn>
-            <Btn small variant="danger" onClick={()=>{if(window.confirm("Delete "+r.name+"? This also deletes their leads."))onUpdate("delete_roofer",{rooferId:r.id});}}>🗑 Delete</Btn>
+            <Btn small onClick={()=>setEditingRoofer(r)}>Edit</Btn>
+            <Btn small variant="danger" onClick={()=>{if(window.confirm("Delete "+r.name+"? This also deletes their leads."))onUpdate("delete_roofer",{rooferId:r.id});}}>Delete</Btn>
           </div>
         </div>)}
       </div>
@@ -2284,7 +2284,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
             <TD><StatusBadge status={lead.status}/></TD>
             <TD>{lead.conversations.length}</TD>
             <TD dim style={{maxWidth:180}}><div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{last?.msg}</div><div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{last?.ts}</div></TD>
-            <TD><Btn small variant="info" onClick={()=>setViewingConvo(lead)}>💬 View</Btn></TD>
+            <TD><Btn small variant="info" onClick={()=>setViewingConvo(lead)}>View</Btn></TD>
           </TR>;
         })}
       </TableWrap>
@@ -2394,8 +2394,8 @@ function PricingEditor({pricing,setPricing,roofers}){
             <div key={plan} style={card({position:"relative",border:`1px solid ${color}33`})}>
               {/* Actions */}
               <div style={{position:"absolute",top:10,right:10,display:"flex",gap:5}}>
-                <Btn small variant="default" onClick={()=>setEditingPlan(plan)}>✏ Edit</Btn>
-                <Btn small variant="danger" onClick={()=>deletePlan(plan)}>🗑</Btn>
+                <Btn small variant="default" onClick={()=>setEditingPlan(plan)}>Edit</Btn>
+                <Btn small variant="danger" onClick={()=>deletePlan(plan)}>✕</Btn>
               </div>
               <div style={{...T.head(16,700),color,marginBottom:6,paddingRight:100}}>{plan}</div>
               <div style={{display:"flex",alignItems:"baseline",gap:3,marginBottom:14}}>
@@ -2543,8 +2543,8 @@ function Subscriptions({roofers,onUpdate}){
 
     {tab==="Billing"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:12}}>
-        <StatCard label="Total MRR" value={`$${mrr.toLocaleString()}`} color={C.green} sub="Active clients" icon="💰"/>
-        <StatCard label="Active Clients" value={roofers.filter(r=>r.status==="active").length} color={C.orange} icon="🏢"/>
+        <StatCard label="Total MRR" value={`$${mrr.toLocaleString()}`} color={C.green} sub="Active clients" icon="$"/>
+        <StatCard label="Active Clients" value={roofers.filter(r=>r.status==="active").length} color={C.orange} icon="◈"/>
         <StatCard label="Annual Run Rate" value={`$${(mrr*12).toLocaleString()}`} color={C.blue} icon="📈"/>
       </div>
       <TableWrap headers={["Company","Plan","Status","Monthly","Next Billing"]}>
@@ -2899,7 +2899,7 @@ export default function App(){
     if(live.stripeStatus==="past_due"||live.status==="past_due"){
       return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}><FontLoader/>
         <div style={{...card(),maxWidth:460,width:"100%",textAlign:"center",padding:36}}>
-          <div style={{fontSize:40,marginBottom:16}}>⚠️</div>
+          <div style={{fontSize:28,marginBottom:16,color:"#f87171",fontWeight:700}}>!</div>
           <div style={{...T.head(20,700),marginBottom:8,color:C.red}}>Payment Required</div>
           <div style={{fontSize:13,color:C.textSub,lineHeight:1.6,marginBottom:24}}>
             Your SkyShield Pro subscription payment failed. Your account has been temporarily suspended. Please update your payment method to restore access.
