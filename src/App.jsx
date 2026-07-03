@@ -89,6 +89,9 @@ function rooferToRow(r){
     inspectors:r.inspectors||[], inspections:r.inspections||[],
     revenue_log:r.revenueLog||[], comm_settings:r.commSettings||DEFAULT_COMM,
     schedule_settings:r.scheduleSettings||DEFAULT_SCHEDULE, notifications:r.notifications||[],
+    stripe_customer_id:r.stripeCustomerId||null,
+    stripe_subscription_id:r.stripeSubscriptionId||null,
+    stripe_status:r.stripeStatus||"none",
     updated_at:new Date().toISOString(),
   };
 }
@@ -101,8 +104,32 @@ function rowToRoofer(row){
     inspectors:row.inspectors||[], inspections:row.inspections||[],
     revenueLog:row.revenue_log||[], commSettings:row.comm_settings||{...DEFAULT_COMM},
     scheduleSettings:row.schedule_settings||{...DEFAULT_SCHEDULE}, notifications:row.notifications||[],
+    stripeCustomerId:row.stripe_customer_id||null,
+    stripeSubscriptionId:row.stripe_subscription_id||null,
+    stripeStatus:row.stripe_status||"none",
   };
 }
+
+// ─── BILLING API ──────────────────────────────────────────────────────────────
+// Calls the Vercel serverless functions in /api/stripe/*.
+// VITE_BILLING_KEY must match SKYSHIELD_API_KEY in your Vercel env vars.
+const BILLING_KEY = import.meta.env?.VITE_BILLING_KEY||"";
+
+async function billingCall(endpoint, body){
+  try{
+    const res = await fetch(`/api/stripe${endpoint}`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "x-skyshield-key":BILLING_KEY },
+      body: JSON.stringify(body),
+    });
+    return res.json();
+  }catch(e){
+    console.error("Billing API error:", e);
+    return { error: e.message };
+  }
+}
+
+
 function leadToRow(l){
   return {
     id:l.id, homeowner:l.homeowner, phone:l.phone, zip:l.zip, roofer_id:l.rooferId,
@@ -710,6 +737,232 @@ function StormMap({storms,roofers}){
 }
 
 // ─── AI AGENT ─────────────────────────────────────────────────────────────────
+// ─── FLOATING AI HELP WIDGET ─────────────────────────────────────────────────
+// A persistent chat bubble in the bottom-right corner of every screen.
+// Context-aware — knows the current user's role, what's on screen, and can
+// explain any feature or guide them through any action step by step.
+function FloatingAIHelp({role, roofer, roofers, leads, storms, currentSection}){
+  const[open,setOpen]=useState(false);
+  const[msgs,setMsgs]=useState([]);
+  const[input,setInput]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[unread,setUnread]=useState(0);
+  const bottomRef=useRef(null);
+  const inputRef=useRef(null);
+
+  useEffect(()=>{
+    if(open){
+      setUnread(0);
+      setTimeout(()=>inputRef.current?.focus(),100);
+    }
+  },[open]);
+  useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); },[msgs]);
+
+  // Greet on first open
+  useEffect(()=>{
+    if(open&&msgs.length===0){
+      const greeting = role==="admin"
+        ? "Hi Noah 👋 I'm your SkyShield Pro assistant. I can help you manage roofers, understand your dashboard, walk you through any feature, or answer questions about the app. What do you need?"
+        : `Hi ${roofer?.name||"there"} 👋 I'm your SkyShield Pro assistant. I can help you navigate the app, understand your leads, explain any feature, or walk you through booking an inspection. What can I help with?`;
+      setMsgs([{role:"assistant",content:greeting}]);
+    }
+  },[open]);
+
+  const sys = role==="admin"
+    ? `You are SkyShield Pro AI — a helpful in-app assistant for Noah, the admin of SkyShield Pro, a roofing CRM SaaS built by Ark Dynamics.
+
+Your job is to help Noah navigate the app, understand features, troubleshoot issues, and manage his business. Be concise, friendly, and practical. Use bullet points for step-by-step instructions.
+
+CURRENT SECTION: ${currentSection||"Dashboard"}
+ROOFERS: ${roofers?.length||0} total, ${roofers?.filter(r=>r.status==="active").length||0} active
+LEADS: ${leads?.length||0} total, ${leads?.filter(l=>l.status==="pending").length||0} pending
+STORMS: ${storms?.length||0} tracked
+
+APP SECTIONS:
+- Command Center: manage roofers, view all leads, storm map, activity feed, AI agent for bulk actions
+- Subscriptions & Billing: manage plans, activate/cancel roofers, track MRR, pricing editor
+- API Settings: configure Twilio (SMS), WeatherAPI (storm scanning), Google Calendar, Stripe, ATTOM data
+
+KEY FEATURES TO EXPLAIN IF ASKED:
+- Storm scanning: auto-detects storms and contacts leads in affected ZIP codes
+- Lead pipeline: pending → contacted → scheduled → won
+- Per-roofer Twilio numbers: each roofer gets their own SMS number
+- AI auto-reply: roofers can enable AI to reply to leads automatically
+- Adult presence verification: required before any inspection is booked
+- Round-robin lead distribution: leads split fairly across roofers in a ZIP
+- Native scheduling: real availability engine with conflict detection
+- Stripe billing: activating a roofer creates a subscription and sends them a payment link
+
+Answer questions about the app helpfully. If asked to do something that requires navigating somewhere, tell them exactly where to go step by step.`
+    : `You are SkyShield Pro AI — a helpful in-app assistant for ${roofer?.name||"a roofer"} using SkyShield Pro, a roofing CRM by Ark Dynamics.
+
+Your job is to help this roofer navigate the app, understand their leads, and make the most of their tools. Be warm, concise, and practical.
+
+CURRENT SECTION: ${currentSection||"Dashboard"}
+THIS ROOFER: ${JSON.stringify({name:roofer?.name,plan:roofer?.plan,territories:roofer?.territories,leads:leads?.length||0})}
+
+ROOFER APP SECTIONS:
+- Dashboard: overview of leads, revenue, and inspections
+- Leads: manage all your leads, send SMS, book inspections
+- Calendar: view and manage upcoming inspections
+- Conversations: read and reply to lead text messages
+- Settings: comm settings, schedule, inspector management
+- AI Agent: use AI to manage leads by typing commands
+
+Explain features clearly. If they ask how to do something, walk them through it step by step. Keep replies short enough to read on a screen.`;
+
+  async function send(){
+    if(!input.trim()||loading) return;
+    const userMsg={role:"user",content:input};
+    const newMsgs=[...msgs,userMsg];
+    setMsgs(newMsgs);
+    setInput("");
+    setLoading(true);
+    try{
+      const reply=await callClaude(newMsgs,sys,600);
+      setMsgs(m=>[...m,{role:"assistant",content:reply}]);
+      if(!open) setUnread(u=>u+1);
+    }catch(e){
+      setMsgs(m=>[...m,{role:"assistant",content:"Sorry, something went wrong. Try again in a moment."}]);
+    }
+    setLoading(false);
+  }
+
+  const SUGGESTIONS = role==="admin"
+    ? ["How do I add a roofer?","How does billing work?","How do I scan for storms?","What does round-robin mean?"]
+    : ["How do I book an inspection?","What does 'contacted' status mean?","How do I reply to a lead?","How do I add an inspector?"];
+
+  return(
+    <>
+      {/* Chat window */}
+      {open&&<div style={{
+        position:"fixed",bottom:84,right:24,zIndex:9998,
+        width:360,height:480,
+        background:C.card,
+        border:`1px solid ${C.borderAct}`,
+        borderRadius:18,
+        display:"flex",flexDirection:"column",
+        boxShadow:`0 24px 60px rgba(0,0,0,0.5),0 0 0 1px ${C.orange}22`,
+        overflow:"hidden",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding:"14px 16px",
+          background:`linear-gradient(135deg,rgba(13,148,136,0.2),rgba(2,132,199,0.15))`,
+          borderBottom:`1px solid ${C.border}`,
+          display:"flex",alignItems:"center",justifyContent:"space-between",
+          flexShrink:0,
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{
+              width:32,height:32,borderRadius:10,
+              background:"linear-gradient(135deg,#0d9488,#0284c7)",
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,
+              boxShadow:"0 4px 12px rgba(13,148,136,0.4)",
+            }}>🤖</div>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:C.text}}>SkyShield Assistant</div>
+              <div style={{fontSize:10,color:C.textSub}}>Powered by Claude · Always here to help</div>
+            </div>
+          </div>
+          <button onClick={()=>setOpen(false)} style={{
+            background:"none",border:"none",cursor:"pointer",
+            color:C.textMuted,fontSize:18,lineHeight:1,padding:4,
+          }}>✕</button>
+        </div>
+
+        {/* Messages */}
+        <div style={{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:10}}>
+          {msgs.map((m,i)=>(
+            <div key={i} style={{
+              maxWidth:"88%",
+              alignSelf:m.role==="user"?"flex-end":"flex-start",
+              background:m.role==="user"?C.orangeDim:C.surface,
+              border:`1px solid ${m.role==="user"?C.orange+"33":C.border}`,
+              borderRadius:m.role==="user"?"12px 12px 3px 12px":"12px 12px 12px 3px",
+              padding:"9px 13px",
+              fontSize:12,lineHeight:1.6,color:C.text,
+              whiteSpace:"pre-wrap",wordBreak:"break-word",
+            }}>{m.content}</div>
+          ))}
+          {loading&&<div style={{
+            alignSelf:"flex-start",background:C.surface,
+            border:`1px solid ${C.border}`,borderRadius:"12px 12px 12px 3px",
+            padding:"9px 13px",fontSize:12,color:C.textMuted,
+          }}>
+            <span style={{animation:"pulse 1s infinite"}}>⏳ Thinking...</span>
+          </div>}
+          {/* Quick suggestion chips — only show when no messages yet */}
+          {msgs.length<=1&&!loading&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
+            {SUGGESTIONS.map(s=>(
+              <button key={s} onClick={()=>{ setInput(s); setTimeout(()=>inputRef.current?.focus(),50); }}
+                style={{
+                  fontSize:11,fontWeight:500,padding:"5px 11px",borderRadius:20,
+                  background:C.orangeDim,color:C.orange,
+                  border:`1px solid ${C.orange}33`,cursor:"pointer",
+                  textAlign:"left",lineHeight:1.4,
+                }}>{s}</button>
+            ))}
+          </div>}
+          <div ref={bottomRef}/>
+        </div>
+
+        {/* Input */}
+        <div style={{
+          padding:"10px 12px",
+          borderTop:`1px solid ${C.border}`,
+          display:"flex",gap:8,flexShrink:0,
+          background:C.surface,
+        }}>
+          <input ref={inputRef} value={input}
+            onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()}
+            placeholder="Ask me anything about the app..."
+            style={{
+              flex:1,background:C.card,
+              border:`1px solid ${C.border}`,
+              borderRadius:10,padding:"8px 12px",
+              color:C.text,fontSize:12,outline:"none",
+            }}/>
+          <button onClick={send} disabled={loading||!input.trim()} style={{
+            width:36,height:36,borderRadius:10,flexShrink:0,
+            background:input.trim()&&!loading?"linear-gradient(135deg,#0d9488,#0284c7)":C.border,
+            border:"none",cursor:input.trim()&&!loading?"pointer":"default",
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:16,transition:"background 0.15s",
+          }}>➤</button>
+        </div>
+      </div>}
+
+      {/* Floating bubble button */}
+      <button onClick={()=>setOpen(o=>!o)} style={{
+        position:"fixed",bottom:24,right:24,zIndex:9999,
+        width:52,height:52,borderRadius:"50%",
+        background:"linear-gradient(135deg,#0d9488,#0284c7)",
+        border:"none",cursor:"pointer",
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontSize:22,
+        boxShadow:"0 4px 20px rgba(13,148,136,0.5),0 2px 8px rgba(0,0,0,0.3)",
+        transition:"transform 0.15s,box-shadow 0.15s",
+      }}
+        onMouseEnter={e=>e.currentTarget.style.transform="scale(1.1)"}
+        onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}
+      >
+        {open?"✕":"🤖"}
+        {/* Unread badge */}
+        {!open&&unread>0&&<div style={{
+          position:"absolute",top:0,right:0,
+          width:18,height:18,borderRadius:"50%",
+          background:C.red,color:"#fff",
+          fontSize:10,fontWeight:700,
+          display:"flex",alignItems:"center",justifyContent:"center",
+          border:`2px solid ${C.bg}`,
+        }}>{unread}</div>}
+      </button>
+    </>
+  );
+}
+
 function AIAgent({roofers,leads,storms,apiKeys,onUpdate,context}){
   const[msgs,setMsgs]=useState([]),[input,setInput]=useState(""),[loading,setLoading]=useState(false);
   const bottomRef=useRef(null);
@@ -2246,10 +2499,42 @@ function Subscriptions({roofers,onUpdate}){
           <TD bold>{r.name}</TD>
           <TD>{r.owner}</TD>
           <TD dim>{r.email}</TD>
-          <TD><select value={r.plan} onChange={e=>onUpdate("update_roofer_plan",{rooferId:r.id,plan:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 8px",color:C.text,fontSize:12}}>{Object.keys(pricing).map(p=><option key={p}>{p}</option>)}</select></TD>
-          <TD><StatusBadge status={r.status}/></TD>
+          <TD><select value={r.plan} onChange={async e=>{
+            const newPlan=e.target.value;
+            onUpdate("update_roofer_plan",{rooferId:r.id,plan:newPlan});
+            if(r.stripeSubscriptionId&&r.stripeStatus==="active"){
+              const result=await billingCall("/stripe/update-subscription",{rooferId:r.id,newPlan});
+              if(result.error) alert("Plan updated locally but Stripe error: "+result.error);
+            }
+          }} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 8px",color:C.text,fontSize:12}}>{Object.keys(pricing).map(p=><option key={p}>{p}</option>)}</select></TD>
+          <TD><StatusBadge status={r.status}/>{r.stripeStatus&&r.stripeStatus!=="none"&&r.stripeStatus!=="active"&&<Badge label={r.stripeStatus} color={C.red} small/>}</TD>
           <TD style={{color:C.green,fontWeight:600}}>{r.status==="active"?`$${(pricing[r.plan]?.price||0).toLocaleString()}/mo`:"—"}</TD>
-          <TD>{r.status!=="active"?<Btn small variant="success" onClick={()=>onUpdate("update_roofer_status",{rooferId:r.id,status:"active"})}>Activate</Btn>:<Btn small variant="danger" onClick={()=>onUpdate("update_roofer_status",{rooferId:r.id,status:"cancelled"})}>Cancel</Btn>}</TD>
+          <TD>
+            {r.status!=="active"&&r.status!=="past_due"
+              ?<Btn small variant="success" onClick={async()=>{
+                  onUpdate("update_roofer_status",{rooferId:r.id,status:"active"});
+                  const result=await billingCall("/stripe/create-subscription",{rooferId:r.id,name:r.name,email:r.email,plan:r.plan});
+                  if(result.paymentLink){
+                    onUpdate("update_roofer_stripe",{rooferId:r.id,stripeCustomerId:result.customerId,stripeSubscriptionId:result.subscriptionId,stripeStatus:"incomplete"});
+                    if(window.confirm(`Subscription created! Open payment link for ${r.name} to enter their card?\n\n${result.paymentLink}`)){
+                      window.open(result.paymentLink,"_blank");
+                    }
+                  }else if(result.error){
+                    alert("Billing error: "+result.error+"\n\nRoofer was activated locally but Stripe subscription was not created.");
+                  }
+                }}>Activate</Btn>
+              :<Btn small variant="danger" onClick={async()=>{
+                  if(!window.confirm(`Cancel ${r.name}'s subscription? They'll keep access until the end of their billing period.`)) return;
+                  onUpdate("update_roofer_status",{rooferId:r.id,status:"cancelled"});
+                  const result=await billingCall("/stripe/cancel-subscription",{rooferId:r.id});
+                  if(result.error) alert("Billing error: "+result.error);
+                }}>Cancel</Btn>
+            }
+            {r.stripeStatus==="past_due"&&<Btn small variant="warning" onClick={async()=>{
+              const result=await billingCall("/stripe/payment-link",{rooferId:r.id,plan:r.plan});
+              if(result.url) window.open(result.url,"_blank");
+            }}>💳 Resend Link</Btn>}
+          </TD>
         </TR>)}
       </TableWrap>
     </div>}
@@ -2574,6 +2859,7 @@ export default function App(){
       case "remove_territory":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,territories:r.territories.filter(z=>z!==payload.zip)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,territories:p.territories.filter(z=>z!==payload.zip)}:p);break;
       case "update_roofer_plan":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,plan:payload.plan}:r));break;
       case "update_roofer_status":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,status:payload.status}:r));break;
+      case "update_roofer_stripe":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,stripeCustomerId:payload.stripeCustomerId,stripeSubscriptionId:payload.stripeSubscriptionId,stripeStatus:payload.stripeStatus}:r));break;
       case "update_comm_settings":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,commSettings:payload.settings}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,commSettings:payload.settings}:p);break;
       case "api_keys":setApiKeys(payload);break;
       case "delete_roofer":setRoofers(p=>p.filter(r=>r.id!==payload.rooferId));setLeads(p=>p.filter(l=>l.rooferId!==payload.rooferId));if(selectedRoofer?.id===payload.rooferId)setSelectedRoofer(null);break;
@@ -2608,6 +2894,31 @@ export default function App(){
   // ── ROOFER VIEW ────────────────────────────────────────────────────────────
   if(auth.role==="roofer"){
     const live=roofers.find(r=>r.id===auth.roofer.id)||auth.roofer;
+
+    // Payment gate — block access if subscription is past_due or cancelled
+    if(live.stripeStatus==="past_due"||live.status==="past_due"){
+      return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}><FontLoader/>
+        <div style={{...card(),maxWidth:460,width:"100%",textAlign:"center",padding:36}}>
+          <div style={{fontSize:40,marginBottom:16}}>⚠️</div>
+          <div style={{...T.head(20,700),marginBottom:8,color:C.red}}>Payment Required</div>
+          <div style={{fontSize:13,color:C.textSub,lineHeight:1.6,marginBottom:24}}>
+            Your SkyShield Pro subscription payment failed. Your account has been temporarily suspended. Please update your payment method to restore access.
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <Btn variant="primary" onClick={async()=>{
+              const result=await billingCall("/stripe/payment-link",{rooferId:live.id,plan:live.plan});
+              if(result.url) window.open(result.url,"_blank");
+              else alert("Could not generate payment link. Please contact support.");
+            }}>💳 Update Payment Method</Btn>
+            <Btn variant="ghost" onClick={handleSignOut}>Sign Out</Btn>
+          </div>
+          <div style={{fontSize:11,color:C.textMuted,marginTop:16}}>
+            Questions? Contact noah.arkdynamics@gmail.com
+          </div>
+        </div>
+      </div>;
+    }
+
     return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)"}}><FontLoader/>
       {showWhatsNew&&<WhatsNewModal onDismiss={dismissWhatsNew}/>}
       <nav style={{position:"sticky",top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 20px"}}>
@@ -2623,6 +2934,7 @@ export default function App(){
         <div style={{marginBottom:20}}><div style={T.head(22,700)}>{live.name}</div><div style={{...flex(8),marginTop:8}}><Badge label={live.plan} color={PLAN_COLORS[live.plan]}/><StatusBadge status={live.status}/></div></div>
         <RooferDashboard roofer={live} leads={leads} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
       </main>
+      <FloatingAIHelp role="roofer" roofer={live} leads={leads.filter(l=>l.rooferId===live.id)} storms={[]} currentSection="Roofer Dashboard"/>
     </div>;
   }
 
@@ -2682,5 +2994,6 @@ export default function App(){
             :<APISettings apiKeys={apiKeys} onUpdate={handleUpdate}/>
       }
     </main>
+    <FloatingAIHelp role="admin" roofers={roofers} leads={leads} storms={storms} currentSection={activeSection}/>
   </div>;
 }
