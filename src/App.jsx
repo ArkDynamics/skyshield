@@ -81,7 +81,7 @@ function getCurrentAccessToken(){ return _currentAccessToken || SUPABASE_ANON_KE
 // rest of the app never has to think about the database's column names.
 
 function rooferToRow(r){
-  return {
+  const row = {
     id:r.id, name:r.name, owner:r.owner, email:r.email, phone:r.phone,
     plan:r.plan, status:r.status, territories:r.territories||[],
     revenue:r.revenue||0, leads:r.leads||0, booked:r.booked||0,
@@ -92,9 +92,12 @@ function rooferToRow(r){
     stripe_customer_id:r.stripeCustomerId||null,
     stripe_subscription_id:r.stripeSubscriptionId||null,
     stripe_status:r.stripeStatus||"none",
-    trial_started_at:r.trialStartedAt||null,
     updated_at:new Date().toISOString(),
   };
+  // Only include trial_started_at if it has a value — never send null
+  // to Supabase since merge-duplicates would overwrite the existing date.
+  if(r.trialStartedAt) row.trial_started_at = r.trialStartedAt;
+  return row;
 }
 function rowToRoofer(row){
   return {
