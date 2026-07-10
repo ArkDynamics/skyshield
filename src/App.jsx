@@ -92,6 +92,7 @@ function rooferToRow(r){
     stripe_customer_id:r.stripeCustomerId||null,
     stripe_subscription_id:r.stripeSubscriptionId||null,
     stripe_status:r.stripeStatus||"none",
+    trial_started_at:r.trialStartedAt||null,
     updated_at:new Date().toISOString(),
   };
 }
@@ -107,7 +108,23 @@ function rowToRoofer(row){
     stripeCustomerId:row.stripe_customer_id||null,
     stripeSubscriptionId:row.stripe_subscription_id||null,
     stripeStatus:row.stripe_status||"none",
+    trialStartedAt:row.trial_started_at||null,
   };
+}
+
+// ─── TRIAL HELPERS ────────────────────────────────────────────────────────────
+const TRIAL_DAYS = 14;
+function trialDaysRemaining(roofer){
+  if(!roofer.trialStartedAt) return TRIAL_DAYS; // hasn't started yet
+  const start = new Date(roofer.trialStartedAt);
+  const expiry = new Date(start.getTime() + TRIAL_DAYS * 24*60*60*1000);
+  const remaining = Math.ceil((expiry - new Date()) / (24*60*60*1000));
+  return Math.max(0, remaining);
+}
+function trialExpired(roofer){
+  if(roofer.status==="active") return false; // paid, never expires
+  if(!roofer.trialStartedAt) return false;   // trial hasn't started
+  return trialDaysRemaining(roofer) <= 0;
 }
 
 // ─── BILLING API ──────────────────────────────────────────────────────────────
@@ -579,8 +596,9 @@ function TD({children,sub,bold,dim,mono,nowrap,style={}}){
 
 // ─── API / NETWORK ────────────────────────────────────────────────────────────
 async function callClaude(messages,system="",max_tokens=1200){
-  const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens,system:system||undefined,messages})});
+  const res=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages,system:system||undefined,max_tokens})});
   const data=await res.json();
+  if(data.error) throw new Error(data.error);
   return data.content?.map(b=>b.text||"").join("")||"No response";
 }
 
@@ -1545,6 +1563,424 @@ function WhatsNewModal({onDismiss}){
   );
 }
 
+// ─── LANDING PAGE ─────────────────────────────────────────────────────────────
+function LandingPage({onSignIn, showLogin, onLoginSuccess}){
+  const[demoName,setDemoName]=useState("");
+  const[demoEmail,setDemoEmail]=useState("");
+  const[demoPhone,setDemoPhone]=useState("");
+  const[demoSent,setDemoSent]=useState(false);
+  const[showDemoForm,setShowDemoForm]=useState(false);
+  const[mobileMenuOpen,setMobileMenuOpen]=useState(false);
+
+  const APP_URL="https://skyshield-sigma.vercel.app";
+
+  const FEATURES=[
+    {icon:"◆",title:"Storm Intelligence",desc:"Automatically detects hail, tornado, and wind events in your service area and instantly generates leads from affected homeowners."},
+    {icon:"→",title:"AI-Powered Outreach",desc:"Sends personalized SMS to leads the moment a storm hits. AI handles replies, qualifies leads, and confirms adult presence before booking."},
+    {icon:"▦",title:"Smart Scheduling",desc:"Real-time availability engine books inspections without double-booking. Inspectors get notified instantly via SMS."},
+    {icon:"◈",title:"Multi-Roofer CRM",desc:"Manage your entire team from one dashboard. Each roofer gets their own number, leads, calendar, and performance stats."},
+    {icon:"$",title:"Stripe Billing Built In",desc:"Subscription management, invoicing, and payment tracking all handled automatically. Know your MRR at a glance."},
+    {icon:"◉",title:"Lead Pipeline",desc:"Track every lead from first contact to closed deal. Round-robin distribution ensures fair assignment across your team."},
+  ];
+
+  const PLANS=[
+    {name:"Starter",price:297,features:["1 roofer seat","Storm scanning","SMS outreach","Lead pipeline","Calendar & scheduling"],color:C.blue},
+    {name:"Pro",price:497,popular:true,features:["3 roofer seats","Everything in Starter","AI auto-reply","Per-roofer SMS numbers","Adult verification gate","Revenue tracking"],color:C.orange},
+    {name:"Elite",price:997,features:["Unlimited seats","Everything in Pro","Priority support","Custom onboarding","API access","White-glove setup"],color:C.purple},
+  ];
+
+  const TESTIMONIALS=[
+    {name:"Marcus H.",company:"Apex Roofing Co",text:"We went from manually tracking leads in spreadsheets to having a fully automated storm response system. Booked 18 inspections in the first week."},
+    {name:"Diane R.",company:"Summit Storm Pros",text:"The AI handles all the initial SMS replies. By the time I look at my dashboard, leads are already qualified and ready to schedule."},
+    {name:"Steve N.",company:"Ironclad Roofing",text:"Finally a CRM built specifically for roofing. Every feature makes sense for how we actually work after storms."},
+  ];
+
+  if(showLogin){
+    return <LoginScreen onLoginSuccess={onLoginSuccess}/>;
+  }
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Inter',sans-serif",color:C.text,
+      backgroundImage:"radial-gradient(ellipse at 20% 0%,rgba(13,148,136,0.18) 0%,transparent 50%),radial-gradient(ellipse at 80% 0%,rgba(2,132,199,0.12) 0%,transparent 45%)"}}>
+
+      {/* ── NAV ── */}
+      <nav style={{position:"sticky",top:0,zIndex:100,
+        background:"rgba(3,14,24,0.85)",backdropFilter:"blur(20px)",
+        borderBottom:`1px solid ${C.border}`,padding:"0 24px"}}>
+        <div style={{maxWidth:1100,margin:"0 auto",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          {/* Logo */}
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:32,height:32,borderRadius:9,background:"linear-gradient(135deg,#0d9488,#0284c7)",
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,
+              boxShadow:"0 4px 14px rgba(13,148,136,0.4)"}}>⛈</div>
+            <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:16,fontWeight:700,letterSpacing:"-0.02em",color:"#fff"}}>
+              Sky<span style={{color:C.orange}}>Shield</span> Pro
+            </div>
+          </div>
+          {/* Nav links */}
+          <div style={{display:"flex",alignItems:"center",gap:28}}>
+            {["Features","Pricing","Contact"].map(l=>(
+              <a key={l} href={`#${l.toLowerCase()}`}
+                style={{fontSize:13,fontWeight:500,color:C.textSub,textDecoration:"none",
+                  cursor:"pointer",transition:"color 0.15s"}}
+                onMouseEnter={e=>e.target.style.color=C.text}
+                onMouseLeave={e=>e.target.style.color=C.textSub}>
+                {l}
+              </a>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={onSignIn} style={{fontSize:13,fontWeight:600,padding:"8px 18px",borderRadius:8,
+              background:"transparent",color:C.textSub,border:`1px solid ${C.border}`,cursor:"pointer"}}>
+              Sign In
+            </button>
+            <button onClick={()=>setShowDemoForm(true)} style={{fontSize:13,fontWeight:600,padding:"8px 18px",borderRadius:8,
+              background:`linear-gradient(135deg,#0d9488,#0284c7)`,color:"#fff",border:"none",cursor:"pointer",
+              boxShadow:"0 4px 14px rgba(13,148,136,0.35)"}}>
+              Start Free Trial
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* ── HERO ── */}
+      <section style={{maxWidth:1100,margin:"0 auto",padding:"90px 24px 80px",textAlign:"center"}}>
+        <div style={{display:"inline-flex",alignItems:"center",gap:8,
+          background:`${C.orange}14`,border:`1px solid ${C.orange}33`,
+          borderRadius:30,padding:"5px 14px",marginBottom:24}}>
+          <span style={{width:6,height:6,borderRadius:"50%",background:C.orange,display:"inline-block"}}/>
+          <span style={{fontSize:12,fontWeight:600,color:C.orange}}>Built exclusively for roofing companies</span>
+        </div>
+        <h1 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:54,fontWeight:800,
+          lineHeight:1.1,letterSpacing:"-0.03em",color:"#fff",marginBottom:20,maxWidth:800,margin:"0 auto 20px"}}>
+          Turn Every Storm Into a{" "}
+          <span style={{background:"linear-gradient(135deg,#2dd4bf,#38bdf8)",
+            WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>
+            Booked Inspection
+          </span>
+        </h1>
+        <p style={{fontSize:18,color:C.textSub,lineHeight:1.7,maxWidth:580,margin:"0 auto 36px"}}>
+          SkyShield Pro automatically detects storms, contacts homeowners by SMS, qualifies leads with AI, and books inspections — all before your competitors even know the storm hit.
+        </p>
+        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+          <button onClick={()=>setShowDemoForm(true)} style={{fontSize:15,fontWeight:700,padding:"14px 32px",borderRadius:10,
+            background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",border:"none",cursor:"pointer",
+            boxShadow:"0 6px 24px rgba(13,148,136,0.4)"}}>
+            Start 14-Day Free Trial
+          </button>
+          <button onClick={()=>setShowDemoForm(true)} style={{fontSize:15,fontWeight:600,padding:"14px 32px",borderRadius:10,
+            background:"transparent",color:C.text,border:`1px solid ${C.border}`,cursor:"pointer"}}>
+            Book a Demo
+          </button>
+        </div>
+        <div style={{fontSize:12,color:C.textMuted,marginTop:16}}>
+          No credit card required · 14-day free trial · Cancel anytime
+        </div>
+
+        {/* Hero dashboard preview */}
+        <div style={{marginTop:60,background:C.card,border:`1px solid ${C.border}`,
+          borderRadius:16,padding:20,backdropFilter:"blur(20px)",
+          boxShadow:"0 40px 80px rgba(0,0,0,0.4)"}}>
+          {/* Fake mini dashboard */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
+            {[{l:"Active Leads",v:"24",c:C.orange},{l:"Booked Today",v:"7",c:C.teal||C.green},{l:"MRR",v:"$2,388",c:C.green},{l:"Storms Tracked",v:"3",c:C.blue}].map(s=>(
+              <div key={s.l} style={{background:C.surface,borderRadius:10,padding:"12px 14px",border:`1px solid ${C.border}`,textAlign:"left"}}>
+                <div style={{fontSize:9,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{s.l}</div>
+                <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:22,fontWeight:700,color:s.c}}>{s.v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:10}}>
+            <div style={{background:C.surface,borderRadius:10,border:`1px solid ${C.border}`,overflow:"hidden"}}>
+              <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,fontSize:11,fontWeight:600,color:C.textSub}}>Lead Pipeline</div>
+              {[{n:"Robert Chen",s:"scheduled",c:C.green},{n:"Linda Park",s:"contacted",c:C.blue},{n:"Tom Wiley",s:"pending",c:C.orange}].map((l,i)=>(
+                <div key={i} style={{padding:"9px 14px",borderBottom:i<2?`1px solid ${C.border}`:"none",
+                  display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{width:26,height:26,borderRadius:7,background:`${l.c}18`,
+                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:l.c}}>
+                      {l.n[0]}
+                    </div>
+                    <span style={{fontSize:12,fontWeight:500,color:C.text}}>{l.n}</span>
+                  </div>
+                  <span style={{fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:5,
+                    background:`${l.c}14`,color:l.c,border:`1px solid ${l.c}28`}}>{l.s}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{background:C.surface,borderRadius:10,border:`1px solid ${C.border}`,overflow:"hidden"}}>
+              <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,fontSize:11,fontWeight:600,color:C.textSub}}>Storm Events</div>
+              {[{n:"Hail — Plano, TX",d:"Jun 12",s:"severe"},{n:"Tornado — Frisco, TX",d:"Jun 13",s:"extreme"},{n:"Wind — Allen, TX",d:"Jun 14",s:"moderate"}].map((s,i)=>(
+                <div key={i} style={{padding:"9px 14px",borderBottom:i<2?`1px solid ${C.border}`:"none",
+                  display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:500,color:C.text}}>{s.n}</div>
+                    <div style={{fontSize:9,color:C.textSub,marginTop:1}}>{s.d}</div>
+                  </div>
+                  <span style={{fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:5,
+                    background:s.s==="extreme"?`${C.red}14`:s.s==="severe"?`${C.orange}14`:`${C.blue}14`,
+                    color:s.s==="extreme"?C.red:s.s==="severe"?C.orange:C.blue,
+                    border:`1px solid ${s.s==="extreme"?C.red:s.s==="severe"?C.orange:C.blue}28`}}>{s.s}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FEATURES ── */}
+      <section id="features" style={{maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
+        <div style={{textAlign:"center",marginBottom:56}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Everything You Need</div>
+          <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:38,fontWeight:800,
+            letterSpacing:"-0.02em",color:"#fff",marginBottom:14}}>Built for how roofing actually works</h2>
+          <p style={{fontSize:16,color:C.textSub,maxWidth:520,margin:"0 auto"}}>
+            Every feature was designed around the storm response workflow — from first alert to closed deal.
+          </p>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
+          {FEATURES.map(f=>(
+            <div key={f.title} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:24,
+              backdropFilter:"blur(20px)"}}>
+              <div style={{width:38,height:38,borderRadius:10,background:`${C.orange}14`,
+                border:`1px solid ${C.orange}28`,display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:16,fontWeight:700,color:C.orange,marginBottom:14}}>{f.icon}</div>
+              <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:15,fontWeight:700,color:"#fff",marginBottom:8}}>{f.title}</div>
+              <div style={{fontSize:13,color:C.textSub,lineHeight:1.6}}>{f.desc}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── HOW IT WORKS ── */}
+      <section style={{background:`${C.orange}06`,borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"80px 24px"}}>
+        <div style={{maxWidth:1100,margin:"0 auto"}}>
+          <div style={{textAlign:"center",marginBottom:56}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>The Workflow</div>
+            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:38,fontWeight:800,letterSpacing:"-0.02em",color:"#fff"}}>
+              Storm to signed deal in hours, not days
+            </h2>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:0,position:"relative"}}>
+            <div style={{position:"absolute",top:28,left:"12.5%",right:"12.5%",height:1,
+              background:`linear-gradient(90deg,${C.orange}44,${C.blue}44)`,zIndex:0}}/>
+            {[
+              {n:"01",t:"Storm Detected",d:"SkyShield scans for hail, tornado, and wind events in your ZIP codes — automatically, around the clock."},
+              {n:"02",t:"Leads Generated",d:"Homeowners in affected areas are identified and added to your pipeline instantly."},
+              {n:"03",t:"AI Contacts Them",d:"Personalized SMS goes out within minutes. AI qualifies the lead and confirms an adult will be home."},
+              {n:"04",t:"Inspection Booked",d:"Once qualified, the AI offers available times and books directly into your inspector's calendar."},
+            ].map((s,i)=>(
+              <div key={i} style={{padding:"0 20px",textAlign:"center",position:"relative",zIndex:1}}>
+                <div style={{width:56,height:56,borderRadius:"50%",
+                  background:i===0||i===3?"linear-gradient(135deg,#0d9488,#0284c7)":C.card,
+                  border:`1px solid ${i===0||i===3?C.orange:C.border}`,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontFamily:"'Space Grotesk',sans-serif",fontSize:16,fontWeight:800,
+                  color:i===0||i===3?"#fff":C.textSub,
+                  margin:"0 auto 20px",
+                  boxShadow:i===0||i===3?"0 8px 24px rgba(13,148,136,0.4)":"none"}}>
+                  {s.n}
+                </div>
+                <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:15,fontWeight:700,color:"#fff",marginBottom:8}}>{s.t}</div>
+                <div style={{fontSize:13,color:C.textSub,lineHeight:1.6}}>{s.desc||s.d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── PRICING ── */}
+      <section id="pricing" style={{maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
+        <div style={{textAlign:"center",marginBottom:56}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Simple Pricing</div>
+          <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:38,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:14}}>
+            Start free. Upgrade when ready.
+          </h2>
+          <p style={{fontSize:16,color:C.textSub}}>14-day free trial on all plans. No credit card required.</p>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
+          {PLANS.map(p=>(
+            <div key={p.name} style={{background:C.card,border:`1px solid ${p.popular?p.color+"55":C.border}`,
+              borderRadius:16,padding:28,position:"relative",
+              backdropFilter:"blur(20px)",
+              boxShadow:p.popular?`0 0 40px ${p.color}22`:"none"}}>
+              {p.popular&&<div style={{position:"absolute",top:-12,left:"50%",transform:"translateX(-50%)",
+                background:`linear-gradient(135deg,#0d9488,#0284c7)`,color:"#fff",
+                fontSize:10,fontWeight:700,padding:"4px 14px",borderRadius:20,
+                textTransform:"uppercase",letterSpacing:"0.06em",whiteSpace:"nowrap"}}>
+                Most Popular
+              </div>}
+              <div style={{fontSize:14,fontWeight:700,color:p.color,marginBottom:16,textTransform:"uppercase",letterSpacing:"0.06em"}}>{p.name}</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:4,marginBottom:6}}>
+                <span style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:42,fontWeight:800,color:"#fff"}}>${p.price}</span>
+                <span style={{fontSize:13,color:C.textSub}}>/month</span>
+              </div>
+              <div style={{fontSize:12,color:C.textMuted,marginBottom:24}}>after free trial</div>
+              <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:28}}>
+                {p.features.map(f=>(
+                  <div key={f} style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                    <span style={{color:p.color,fontSize:12,flexShrink:0,marginTop:1}}>✓</span>
+                    <span style={{fontSize:13,color:C.textSub,lineHeight:1.4}}>{f}</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={()=>setShowDemoForm(true)} style={{width:"100%",fontSize:14,fontWeight:600,
+                padding:"12px 0",borderRadius:9,cursor:"pointer",
+                background:p.popular?"linear-gradient(135deg,#0d9488,#0284c7)":"transparent",
+                color:p.popular?"#fff":p.color,
+                border:p.popular?"none":`1px solid ${p.color}44`,
+                boxShadow:p.popular?"0 4px 14px rgba(13,148,136,0.35)":"none"}}>
+                Start Free Trial
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* ── TESTIMONIALS ── */}
+      <section style={{background:`${C.card}`,borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"80px 24px"}}>
+        <div style={{maxWidth:1100,margin:"0 auto"}}>
+          <div style={{textAlign:"center",marginBottom:48}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>What Roofers Say</div>
+            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:34,fontWeight:800,letterSpacing:"-0.02em",color:"#fff"}}>
+              Real results from real roofing companies
+            </h2>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
+            {TESTIMONIALS.map(t=>(
+              <div key={t.name} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:24}}>
+                <div style={{fontSize:13,color:C.textSub,lineHeight:1.7,marginBottom:20,fontStyle:"italic"}}>
+                  "{t.text}"
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{width:36,height:36,borderRadius:10,
+                    background:"linear-gradient(135deg,rgba(13,148,136,0.4),rgba(2,132,199,0.3))",
+                    border:`1px solid ${C.border}`,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    fontSize:14,fontWeight:700,color:C.orange}}>
+                    {t.name[0]}
+                  </div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:"#fff"}}>{t.name}</div>
+                    <div style={{fontSize:11,color:C.textSub}}>{t.company}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── CONTACT / DEMO FORM ── */}
+      <section id="contact" style={{maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:60,alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Get Started</div>
+            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:36,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:16,lineHeight:1.2}}>
+              Ready to capture more storm leads?
+            </h2>
+            <p style={{fontSize:15,color:C.textSub,lineHeight:1.7,marginBottom:24}}>
+              Start your free 14-day trial today or book a demo and we'll walk you through the entire platform live.
+            </p>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              {[
+                {t:"14-day free trial",d:"Full access to all features, no credit card needed"},
+                {t:"Live demo available",d:"See the platform in action with your own data"},
+                {t:"Same-day onboarding",d:"We'll get you set up and running within hours"},
+              ].map(item=>(
+                <div key={item.t} style={{display:"flex",alignItems:"flex-start",gap:12}}>
+                  <div style={{width:20,height:20,borderRadius:6,background:`${C.orange}14`,
+                    border:`1px solid ${C.orange}28`,display:"flex",alignItems:"center",justifyContent:"center",
+                    fontSize:10,color:C.orange,flexShrink:0,marginTop:1}}>✓</div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:"#fff"}}>{item.t}</div>
+                    <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{item.d}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Contact form */}
+          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:32,backdropFilter:"blur(20px)"}}>
+            {demoSent
+              ? <div style={{textAlign:"center",padding:"20px 0"}}>
+                  <div style={{width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#0d9488,#0284c7)",
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,margin:"0 auto 16px",
+                    boxShadow:"0 8px 24px rgba(13,148,136,0.4)"}}>✓</div>
+                  <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:700,color:"#fff",marginBottom:8}}>You're on the list!</div>
+                  <div style={{fontSize:13,color:C.textSub,lineHeight:1.6}}>
+                    Noah will reach out within 24 hours to get you set up. Check your email for confirmation.
+                  </div>
+                  <button onClick={onSignIn} style={{marginTop:20,fontSize:13,fontWeight:600,padding:"10px 24px",
+                    borderRadius:8,background:`linear-gradient(135deg,#0d9488,#0284c7)`,
+                    color:"#fff",border:"none",cursor:"pointer"}}>
+                    Sign In to Your Trial
+                  </button>
+                </div>
+              : <>
+                  <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:700,color:"#fff",marginBottom:4}}>Start Free Trial / Book a Demo</div>
+                  <div style={{fontSize:12,color:C.textSub,marginBottom:20}}>No credit card · 14 days free · Cancel anytime</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                    {[
+                      {label:"Your Name",val:demoName,set:setDemoName,ph:"Marcus Holt"},
+                      {label:"Email Address",val:demoEmail,set:setDemoEmail,ph:"marcus@yourcompany.com"},
+                      {label:"Phone Number",val:demoPhone,set:setDemoPhone,ph:"972-555-0101"},
+                    ].map(f=>(
+                      <div key={f.label}>
+                        <div style={{fontSize:11,fontWeight:600,color:C.textSub,marginBottom:5,textTransform:"uppercase",letterSpacing:"0.06em"}}>{f.label}</div>
+                        <input value={f.val} onChange={e=>f.set(e.target.value)}
+                          placeholder={f.ph}
+                          style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                            borderRadius:8,padding:"10px 12px",color:C.text,fontSize:13,outline:"none"}}/>
+                      </div>
+                    ))}
+                    <button onClick={()=>{
+                      if(!demoName||!demoEmail){alert("Please enter your name and email.");return;}
+                      setDemoSent(true);
+                    }} style={{fontSize:14,fontWeight:700,padding:"13px 0",borderRadius:9,
+                      background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",border:"none",
+                      cursor:"pointer",marginTop:4,
+                      boxShadow:"0 4px 14px rgba(13,148,136,0.35)"}}>
+                      Get Started Free →
+                    </button>
+                    <div style={{fontSize:11,color:C.textMuted,textAlign:"center"}}>
+                      By submitting you agree to be contacted by Ark Dynamics about SkyShield Pro.
+                    </div>
+                  </div>
+                </>
+            }
+          </div>
+        </div>
+      </section>
+
+      {/* ── FOOTER ── */}
+      <footer style={{borderTop:`1px solid ${C.border}`,padding:"32px 24px"}}>
+        <div style={{maxWidth:1100,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:26,height:26,borderRadius:7,background:"linear-gradient(135deg,#0d9488,#0284c7)",
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:13}}>⛈</div>
+            <span style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:14,fontWeight:700,color:"#fff"}}>
+              Sky<span style={{color:C.orange}}>Shield</span> Pro
+            </span>
+            <span style={{fontSize:12,color:C.textMuted}}>by Ark Dynamics</span>
+          </div>
+          <div style={{display:"flex",gap:20}}>
+            {["Features","Pricing","Contact"].map(l=>(
+              <a key={l} href={`#${l.toLowerCase()}`}
+                style={{fontSize:12,color:C.textMuted,textDecoration:"none"}}>{l}</a>
+            ))}
+          </div>
+          <div style={{fontSize:12,color:C.textMuted}}>
+            © {new Date().getFullYear()} Ark Dynamics · noah.arkdynamics@gmail.com
+          </div>
+        </div>
+      </footer>
+
+    </div>
+  );
+}
+
 function LoginScreen({onLoginSuccess}){
   const[view,setView]=useState("signin"); // signin | forgot | sent
   const[email,setEmail]=useState(""),[password,setPassword]=useState("");
@@ -2146,7 +2582,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           <div style={{...T.head(13,600),marginBottom:14}}>Roofer Performance</div>
           {roofers.map(r=><div key={r.id} onClick={()=>onSelectRoofer(r)} style={{...flex(12,"center","space-between"),padding:"9px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=C.cardHov} onMouseLeave={e=>e.currentTarget.style.background=""}>
             <div><div style={{fontSize:13,fontWeight:500}}>{r.name}</div><div style={{fontSize:11,color:C.textMuted,marginTop:2}}>{r.leads} leads · {r.booked} booked · ${(r.revenue/1000).toFixed(0)}k</div></div>
-            <div style={flex(6)}><Badge label={r.plan} color={PLAN_COLORS[r.plan]} small/><StatusBadge status={r.status}/></div>
+            <div style={flex(6)}><Badge label={r.plan} color={PLAN_COLORS[r.plan]} small/><StatusBadge status={r.status}/>{r.status==="trial"&&!trialExpired(r)&&<Badge label={`${trialDaysRemaining(r)}d left`} color={trialDaysRemaining(r)<=5?C.red:C.yellow} small/>}{trialExpired(r)&&<Badge label="Trial Expired" color={C.red} small/>}</div>
           </div>)}
         </div>
       </div>
@@ -2635,6 +3071,7 @@ export default function App(){
   const[dataLoaded,setDataLoaded]=useState(false);
   const[dataLoadError,setDataLoadError]=useState(null);
   const[showWhatsNew,setShowWhatsNew]=useState(false);
+  const[showLogin,setShowLogin]=useState(false);
 
   // Detect Supabase password-recovery link (#access_token=...&type=recovery),
   // then attempt to restore a previous session from persistent storage so the
@@ -2826,7 +3263,7 @@ export default function App(){
 
   function handleUpdate(action,payload){
     switch(action){
-      case "add_roofer":setRoofers(p=>[...p,payload.roofer]);break;
+      case "add_roofer":setRoofers(p=>[...p,{...payload.roofer,trialStartedAt:payload.roofer.trialStartedAt||new Date().toISOString()}]);break;
       case "notify_roofer":
         setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,notifications:[{id:"n"+Date.now()+Math.random(),...payload.notification,read:false,ts:new Date().toLocaleString()},...(r.notifications||[])].slice(0,50)}:r));
         setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,notifications:[{id:"n"+Date.now()+Math.random(),...payload.notification,read:false,ts:new Date().toLocaleString()},...(p.notifications||[])].slice(0,50)}:p);
@@ -2881,7 +3318,7 @@ export default function App(){
 
   // ── SHOW LOGIN ─────────────────────────────────────────────────────────────
   if(checkingSession) return <><FontLoader/><div style={{minHeight:"100vh",background:C.bg}}/></>;
-  if(!auth.loggedIn) return <><FontLoader/><LoginScreen onLoginSuccess={handleLoginSuccess}/></>;
+  if(!auth.loggedIn) return <><FontLoader/><LandingPage onSignIn={()=>setShowLogin(true)} showLogin={showLogin} onLoginSuccess={handleLoginSuccess}/></>;
 
   // ── LOADING DATA FROM SUPABASE ─────────────────────────────────────────────
   if(!dataLoaded) return <><FontLoader/><div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -2909,7 +3346,7 @@ export default function App(){
               const result=await billingCall("/stripe/payment-link",{rooferId:live.id,plan:live.plan});
               if(result.url) window.open(result.url,"_blank");
               else alert("Could not generate payment link. Please contact support.");
-            }}>💳 Update Payment Method</Btn>
+            }}>Update Payment Method</Btn>
             <Btn variant="ghost" onClick={handleSignOut}>Sign Out</Btn>
           </div>
           <div style={{fontSize:11,color:C.textMuted,marginTop:16}}>
@@ -2919,8 +3356,50 @@ export default function App(){
       </div>;
     }
 
+    // Trial expiry gate — show upgrade wall when 14-day trial has ended
+    if(trialExpired(live)){
+      return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}><FontLoader/>
+        <div style={{...card(),maxWidth:480,width:"100%",textAlign:"center",padding:40,border:`1px solid ${C.borderAct}`}}>
+          <div style={{width:56,height:56,borderRadius:16,background:"linear-gradient(135deg,#0d9488,#0284c7)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,margin:"0 auto 20px",boxShadow:"0 8px 24px rgba(13,148,136,0.4)"}}>⛈</div>
+          <div style={{...T.head(22,700),marginBottom:8}}>Your Trial Has Ended</div>
+          <div style={{fontSize:13,color:C.textSub,lineHeight:1.7,marginBottom:28}}>
+            Your 14-day free trial of SkyShield Pro has expired. Choose a plan below to keep access to your leads, inspections, and all your data — no data is lost.
+          </div>
+          {/* Plan options */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:24}}>
+            {[{name:"Starter",price:297},{name:"Pro",price:497},{name:"Elite",price:997}].map(p=>(
+              <div key={p.name} style={{...card({padding:"16px 12px",textAlign:"center"}),border:`1px solid ${p.name==="Pro"?C.orange+"66":C.border}`,position:"relative"}}>
+                {p.name==="Pro"&&<div style={{position:"absolute",top:-10,left:"50%",transform:"translateX(-50%)",background:C.orange,color:"#000",fontSize:9,fontWeight:700,padding:"2px 10px",borderRadius:10,textTransform:"uppercase",whiteSpace:"nowrap"}}>Most Popular</div>}
+                <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:4}}>{p.name}</div>
+                <div style={{fontSize:22,fontWeight:800,color:C.orange,lineHeight:1}}>${p.price}</div>
+                <div style={{fontSize:10,color:C.textSub,marginBottom:12}}>/month</div>
+                <Btn variant={p.name==="Pro"?"primary":"default"} small onClick={async()=>{
+                  const result=await billingCall("/stripe/create-subscription",{rooferId:live.id,name:live.name,email:live.email,plan:p.name});
+                  if(result.paymentLink) window.open(result.paymentLink,"_blank");
+                  else alert("Error generating payment link. Please contact support.");
+                }}>Choose {p.name}</Btn>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:11,color:C.textMuted,marginBottom:16}}>No contracts · Cancel anytime · Your data is safe</div>
+          <Btn variant="ghost" small onClick={handleSignOut}>Sign Out</Btn>
+        </div>
+      </div>;
+    }
+
+    // Show trial banner if active and expiring soon (5 days or less)
+    const daysLeft=trialDaysRemaining(live);
+    const showTrialBanner=live.status==="trial"&&daysLeft<=5&&daysLeft>0;
+
     return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)"}}><FontLoader/>
       {showWhatsNew&&<WhatsNewModal onDismiss={dismissWhatsNew}/>}
+      {showTrialBanner&&<div style={{background:`linear-gradient(90deg,${C.amber}22,${C.amber}11)`,borderBottom:`1px solid ${C.amber}44`,padding:"8px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+        <div style={{fontSize:12,color:C.amber,fontWeight:500}}>Your free trial expires in <strong>{daysLeft} day{daysLeft===1?"":"s"}</strong>. Upgrade now to keep access to all your data and leads.</div>
+        <Btn small variant="warning" onClick={async()=>{
+          const result=await billingCall("/stripe/create-subscription",{rooferId:live.id,name:live.name,email:live.email,plan:live.plan||"Starter"});
+          if(result.paymentLink) window.open(result.paymentLink,"_blank");
+        }}>Upgrade Now</Btn>
+      </div>}
       <nav style={{position:"sticky",top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 20px"}}>
         <div style={{maxWidth:1300,margin:"0 auto",...flex(0,"center","space-between"),height:54}}>
           <div style={flex(10)}>
