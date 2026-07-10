@@ -3024,8 +3024,11 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
 
     {tab==="Activity"&&<div style={card()}>
       <div style={{...flex(0,"center","space-between"),marginBottom:14}}>
-        <span style={T.head(14,600)}>📋 Activity Feed</span>
-        <Badge label={`${activities.length} events`} color={C.textMuted} small/>
+        <span style={T.head(14,600)}>Activity Feed</span>
+        <div style={flex(8)}>
+          <Badge label={`${activities.length} events`} color={C.textMuted} small/>
+          {activities.length>0&&<Btn small variant="danger" onClick={()=>{if(window.confirm("Clear all activity? This cannot be undone.")) onUpdate("clear_activities",{});}}>Clear All</Btn>}
+        </div>
       </div>
       <ActivityFeed activities={activities}/>
     </div>}
@@ -3578,6 +3581,7 @@ export default function App(){
       case "lead_status":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,status:payload.status}:l));break;
       case "add_conversation":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,conversations:[...(l.conversations||[]),payload.entry]}:l));break;
       case "update_lead_notes":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,notes:payload.notes}:l));break;
+      case "clear_activities":setActivities([]);break;
       case "update_adult_confirmed":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,adultConfirmed:payload.status}:l));break;
       case "set_contacted_at":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,contactedAt:payload.ts}:l));break;
       case "mark_followup_sent":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,followupSent:true}:l));break;
