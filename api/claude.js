@@ -1,6 +1,5 @@
 // api/claude.js
 // Proxies Claude API calls from the frontend so the API key stays server-side.
-// Called by callClaude() in the React app at /api/claude.
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -12,11 +11,15 @@ module.exports = async function handler(req, res) {
 
   const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_KEY) {
-    return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured in Vercel env vars" });
+    return res.status(500).json({ error: "ANTHROPIC_API_KEY is not set in Vercel environment variables. Go to Vercel → Settings → Environment Variables and add it, then redeploy." });
   }
 
   try {
     const { messages, system, max_tokens } = req.body;
+
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "messages array is required" });
+    }
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -36,14 +39,14 @@ module.exports = async function handler(req, res) {
     const data = await response.json();
 
     if (!response.ok) {
-      console.error("Anthropic API error:", data);
-      return res.status(response.status).json({ error: data.error?.message || "Anthropic API error" });
+      console.error("Anthropic API error:", JSON.stringify(data));
+      return res.status(response.status).json({ error: data.error?.message || "Anthropic API error", detail: data });
     }
 
     return res.json(data);
 
   } catch (err) {
-    console.error("Claude proxy error:", err);
+    console.error("Claude proxy error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 };
