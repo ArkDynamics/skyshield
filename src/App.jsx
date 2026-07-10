@@ -1569,10 +1569,65 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
   const[demoEmail,setDemoEmail]=useState("");
   const[demoPhone,setDemoPhone]=useState("");
   const[demoSent,setDemoSent]=useState(false);
-  const[showDemoForm,setShowDemoForm]=useState(false);
-  const[mobileMenuOpen,setMobileMenuOpen]=useState(false);
+  const[count,setCount]=useState({leads:0,storms:0,mrr:0,booked:0});
+  const[mapDots,setMapDots]=useState([]);
+  const[smsStep,setSmsStep]=useState(0);
 
-  const APP_URL="https://skyshield-sigma.vercel.app";
+  // Animate counters on mount
+  useEffect(()=>{
+    const targets={leads:247,storms:18,mrr:12388,booked:94};
+    const duration=1800;
+    const steps=60;
+    let step=0;
+    const t=setInterval(()=>{
+      step++;
+      const p=Math.min(step/steps,1);
+      const ease=1-Math.pow(1-p,3);
+      setCount({
+        leads:Math.floor(targets.leads*ease),
+        storms:Math.floor(targets.storms*ease),
+        mrr:Math.floor(targets.mrr*ease),
+        booked:Math.floor(targets.booked*ease),
+      });
+      if(step>=steps) clearInterval(t);
+    },duration/steps);
+    return()=>clearInterval(t);
+  },[]);
+
+  // Animate storm map dots
+  useEffect(()=>{
+    const ZIPS=[
+      {x:52,y:38,label:"75023",severity:"severe"},
+      {x:58,y:32,label:"75034",severity:"extreme"},
+      {x:44,y:44,label:"75002",severity:"moderate"},
+      {x:62,y:41,label:"75025",severity:"severe"},
+      {x:48,y:29,label:"75035",severity:"moderate"},
+      {x:55,y:48,label:"75013",severity:"extreme"},
+    ];
+    let i=0;
+    const t=setInterval(()=>{
+      if(i<ZIPS.length){ setMapDots(d=>[...d,{...ZIPS[i],id:i,born:Date.now()}]); i++; }
+      else{ setMapDots([]); i=0; }
+    },600);
+    return()=>clearInterval(t);
+  },[]);
+
+  // Animate SMS conversation
+  const SMS_STEPS=[
+    {role:"ai",msg:"Hi Sarah! We noticed your area (75023) was hit by a hail storm. Apex Roofing offers FREE roof inspections — reply YES to schedule!"},
+    {role:"lead",msg:"YES please, when can you come?"},
+    {role:"ai",msg:"Great! We have openings tomorrow at 10am or 2pm. Which works better for you?"},
+    {role:"lead",msg:"10am works!"},
+    {role:"ai",msg:"Perfect! Your inspection is confirmed for tomorrow at 10am with Jake Torres. See you then!"},
+  ];
+  useEffect(()=>{
+    if(smsStep>=SMS_STEPS.length) return;
+    const delay=smsStep===0?800:1400;
+    const t=setTimeout(()=>setSmsStep(s=>s+1),delay);
+    return()=>clearTimeout(t);
+  },[smsStep]);
+
+  const sevColor=s=>s==="extreme"?"#f87171":s==="severe"?"#fbbf24":"#38bdf8";
 
   const FEATURES=[
     {icon:"◆",title:"Storm Intelligence",desc:"Automatically detects hail, tornado, and wind events in your service area and instantly generates leads from affected homeowners."},
@@ -1585,30 +1640,65 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
 
   const PLANS=[
     {name:"Starter",price:297,features:["1 roofer seat","Storm scanning","SMS outreach","Lead pipeline","Calendar & scheduling"],color:C.blue},
-    {name:"Pro",price:497,popular:true,features:["3 roofer seats","Everything in Starter","AI auto-reply","Per-roofer SMS numbers","Adult verification gate","Revenue tracking"],color:C.orange},
+    {name:"Pro",price:497,popular:true,features:["3 roofer seats","Everything in Starter","AI auto-reply","Per-roofer SMS numbers","Revenue tracking"],color:C.orange},
     {name:"Elite",price:997,features:["Unlimited seats","Everything in Pro","Priority support","Custom onboarding","API access","White-glove setup"],color:C.purple},
   ];
 
   const TESTIMONIALS=[
-    {name:"Marcus H.",company:"Apex Roofing Co",text:"We went from manually tracking leads in spreadsheets to having a fully automated storm response system. Booked 18 inspections in the first week."},
+    {name:"Marcus H.",company:"Apex Roofing Co",text:"We went from manually tracking leads in spreadsheets to a fully automated storm response system. Booked 18 inspections in the first week."},
     {name:"Diane R.",company:"Summit Storm Pros",text:"The AI handles all the initial SMS replies. By the time I look at my dashboard, leads are already qualified and ready to schedule."},
     {name:"Steve N.",company:"Ironclad Roofing",text:"Finally a CRM built specifically for roofing. Every feature makes sense for how we actually work after storms."},
   ];
 
-  if(showLogin){
-    return <LoginScreen onLoginSuccess={onLoginSuccess}/>;
-  }
+  if(showLogin) return <LoginScreen onLoginSuccess={onLoginSuccess}/>;
 
   return(
-    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Inter',sans-serif",color:C.text,
-      backgroundImage:"radial-gradient(ellipse at 20% 0%,rgba(13,148,136,0.18) 0%,transparent 50%),radial-gradient(ellipse at 80% 0%,rgba(2,132,199,0.12) 0%,transparent 45%)"}}>
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Inter',sans-serif",color:C.text,overflowX:"hidden"}}>
+
+      {/* ── HERO BACKGROUND GRAPHICS ── */}
+      <div style={{position:"fixed",inset:0,zIndex:0,pointerEvents:"none",overflow:"hidden"}}>
+        {/* Radial glows */}
+        <div style={{position:"absolute",top:"-20%",left:"-10%",width:700,height:700,borderRadius:"50%",
+          background:"radial-gradient(circle,rgba(13,148,136,0.12) 0%,transparent 70%)"}}/>
+        <div style={{position:"absolute",top:"-10%",right:"-10%",width:600,height:600,borderRadius:"50%",
+          background:"radial-gradient(circle,rgba(2,132,199,0.1) 0%,transparent 70%)"}}/>
+        <div style={{position:"absolute",bottom:"20%",right:"5%",width:400,height:400,borderRadius:"50%",
+          background:"radial-gradient(circle,rgba(45,212,191,0.06) 0%,transparent 70%)"}}/>
+        {/* Grid */}
+        <div style={{position:"absolute",inset:0,
+          backgroundImage:"linear-gradient(rgba(45,212,191,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(45,212,191,0.03) 1px,transparent 1px)",
+          backgroundSize:"60px 60px"}}/>
+        {/* Floating orbs */}
+        {[
+          {x:"15%",y:"20%",size:6,color:"#2dd4bf",delay:0},
+          {x:"82%",y:"15%",size:4,color:"#38bdf8",delay:0.5},
+          {x:"70%",y:"60%",size:5,color:"#818cf8",delay:1},
+          {x:"25%",y:"70%",size:3,color:"#2dd4bf",delay:1.5},
+          {x:"90%",y:"80%",size:4,color:"#38bdf8",delay:0.8},
+          {x:"40%",y:"85%",size:3,color:"#818cf8",delay:0.3},
+        ].map((orb,i)=>(
+          <div key={i} style={{
+            position:"absolute",left:orb.x,top:orb.y,
+            width:orb.size,height:orb.size,borderRadius:"50%",
+            background:orb.color,
+            boxShadow:`0 0 ${orb.size*4}px ${orb.color}`,
+            animation:`pulse ${2+orb.delay}s ease-in-out infinite alternate`,
+          }}/>
+        ))}
+        <style>{`
+          @keyframes pulse { from{opacity:0.3;transform:scale(1)} to{opacity:1;transform:scale(1.5)} }
+          @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+          @keyframes ripple { 0%{transform:scale(0.5);opacity:0.8} 100%{transform:scale(2.5);opacity:0} }
+          @keyframes slideIn { from{opacity:0;transform:translateX(-10px)} to{opacity:1;transform:translateX(0)} }
+          @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+        `}</style>
+      </div>
 
       {/* ── NAV ── */}
       <nav style={{position:"sticky",top:0,zIndex:100,
-        background:"rgba(3,14,24,0.85)",backdropFilter:"blur(20px)",
+        background:"rgba(3,14,24,0.9)",backdropFilter:"blur(20px)",
         borderBottom:`1px solid ${C.border}`,padding:"0 24px"}}>
         <div style={{maxWidth:1100,margin:"0 auto",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          {/* Logo */}
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:32,height:32,borderRadius:9,background:"linear-gradient(135deg,#0d9488,#0284c7)",
               display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,
@@ -1617,14 +1707,10 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
               Sky<span style={{color:C.orange}}>Shield</span> Pro
             </div>
           </div>
-          {/* Nav links */}
           <div style={{display:"flex",alignItems:"center",gap:28}}>
             {["Features","Pricing","Contact"].map(l=>(
               <a key={l} href={`#${l.toLowerCase()}`}
-                style={{fontSize:13,fontWeight:500,color:C.textSub,textDecoration:"none",
-                  cursor:"pointer",transition:"color 0.15s"}}
-                onMouseEnter={e=>e.target.style.color=C.text}
-                onMouseLeave={e=>e.target.style.color=C.textSub}>
+                style={{fontSize:13,fontWeight:500,color:C.textSub,textDecoration:"none",cursor:"pointer"}}>
                 {l}
               </a>
             ))}
@@ -1634,8 +1720,9 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
               background:"transparent",color:C.textSub,border:`1px solid ${C.border}`,cursor:"pointer"}}>
               Sign In
             </button>
-            <button onClick={()=>setShowDemoForm(true)} style={{fontSize:13,fontWeight:600,padding:"8px 18px",borderRadius:8,
-              background:`linear-gradient(135deg,#0d9488,#0284c7)`,color:"#fff",border:"none",cursor:"pointer",
+            <button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
+              style={{fontSize:13,fontWeight:600,padding:"8px 18px",borderRadius:8,
+              background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",border:"none",cursor:"pointer",
               boxShadow:"0 4px 14px rgba(13,148,136,0.35)"}}>
               Start Free Trial
             </button>
@@ -1644,47 +1731,84 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
       </nav>
 
       {/* ── HERO ── */}
-      <section style={{maxWidth:1100,margin:"0 auto",padding:"90px 24px 80px",textAlign:"center"}}>
+      <section style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:"80px 24px 60px",textAlign:"center"}}>
         <div style={{display:"inline-flex",alignItems:"center",gap:8,
           background:`${C.orange}14`,border:`1px solid ${C.orange}33`,
-          borderRadius:30,padding:"5px 14px",marginBottom:24}}>
-          <span style={{width:6,height:6,borderRadius:"50%",background:C.orange,display:"inline-block"}}/>
+          borderRadius:30,padding:"5px 14px",marginBottom:24,
+          animation:"fadeUp 0.6s ease forwards"}}>
+          <span style={{width:6,height:6,borderRadius:"50%",background:C.orange,display:"inline-block",
+            animation:"pulse 1.5s ease-in-out infinite"}}/>
           <span style={{fontSize:12,fontWeight:600,color:C.orange}}>Built exclusively for roofing companies</span>
         </div>
-        <h1 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:54,fontWeight:800,
-          lineHeight:1.1,letterSpacing:"-0.03em",color:"#fff",marginBottom:20,maxWidth:800,margin:"0 auto 20px"}}>
-          Turn Every Storm Into a{" "}
+        <h1 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:58,fontWeight:800,
+          lineHeight:1.08,letterSpacing:"-0.03em",color:"#fff",marginBottom:20,
+          animation:"fadeUp 0.7s ease forwards"}}>
+          Turn Every Storm Into a<br/>
           <span style={{background:"linear-gradient(135deg,#2dd4bf,#38bdf8)",
             WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>
             Booked Inspection
           </span>
         </h1>
-        <p style={{fontSize:18,color:C.textSub,lineHeight:1.7,maxWidth:580,margin:"0 auto 36px"}}>
+        <p style={{fontSize:18,color:C.textSub,lineHeight:1.7,maxWidth:560,margin:"0 auto 36px",
+          animation:"fadeUp 0.8s ease forwards"}}>
           SkyShield Pro automatically detects storms, contacts homeowners by SMS, qualifies leads with AI, and books inspections — all before your competitors even know the storm hit.
         </p>
-        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
-          <button onClick={()=>setShowDemoForm(true)} style={{fontSize:15,fontWeight:700,padding:"14px 32px",borderRadius:10,
+        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap",marginBottom:16,
+          animation:"fadeUp 0.9s ease forwards"}}>
+          <button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
+            style={{fontSize:15,fontWeight:700,padding:"15px 34px",borderRadius:10,
             background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",border:"none",cursor:"pointer",
-            boxShadow:"0 6px 24px rgba(13,148,136,0.4)"}}>
-            Start 14-Day Free Trial
+            boxShadow:"0 6px 24px rgba(13,148,136,0.45)"}}>
+            Start 14-Day Free Trial →
           </button>
-          <button onClick={()=>setShowDemoForm(true)} style={{fontSize:15,fontWeight:600,padding:"14px 32px",borderRadius:10,
+          <button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
+            style={{fontSize:15,fontWeight:600,padding:"15px 34px",borderRadius:10,
             background:"transparent",color:C.text,border:`1px solid ${C.border}`,cursor:"pointer"}}>
             Book a Demo
           </button>
         </div>
-        <div style={{fontSize:12,color:C.textMuted,marginTop:16}}>
+        <div style={{fontSize:12,color:C.textMuted,marginBottom:60}}>
           No credit card required · 14-day free trial · Cancel anytime
         </div>
 
-        {/* Hero dashboard preview */}
-        <div style={{marginTop:60,background:C.card,border:`1px solid ${C.border}`,
-          borderRadius:16,padding:20,backdropFilter:"blur(20px)",
-          boxShadow:"0 40px 80px rgba(0,0,0,0.4)"}}>
-          {/* Fake mini dashboard */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
-            {[{l:"Active Leads",v:"24",c:C.orange},{l:"Booked Today",v:"7",c:C.teal||C.green},{l:"MRR",v:"$2,388",c:C.green},{l:"Storms Tracked",v:"3",c:C.blue}].map(s=>(
-              <div key={s.l} style={{background:C.surface,borderRadius:10,padding:"12px 14px",border:`1px solid ${C.border}`,textAlign:"left"}}>
+        {/* ── ANIMATED STAT COUNTERS ── */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:40}}>
+          {[
+            {label:"Leads Generated",value:count.leads.toLocaleString(),suffix:"+",color:"#2dd4bf"},
+            {label:"Storms Tracked",value:count.storms,suffix:"",color:"#38bdf8"},
+            {label:"Monthly Revenue",value:"$"+count.mrr.toLocaleString(),suffix:"",color:"#4ade80"},
+            {label:"Inspections Booked",value:count.booked,suffix:"%",color:"#818cf8"},
+          ].map(s=>(
+            <div key={s.label} style={{background:"rgba(255,255,255,0.03)",backdropFilter:"blur(20px)",
+              border:`1px solid rgba(255,255,255,0.07)`,borderRadius:14,padding:"20px 16px",
+              boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06)"}}>
+              <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:32,fontWeight:800,
+                color:s.color,lineHeight:1,marginBottom:6}}>{s.value}{s.suffix}</div>
+              <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",
+                letterSpacing:"0.08em"}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── DASHBOARD PREVIEW ── */}
+        <div style={{background:"rgba(7,24,40,0.9)",border:`1px solid ${C.border}`,
+          borderRadius:18,padding:20,backdropFilter:"blur(20px)",
+          boxShadow:"0 40px 80px rgba(0,0,0,0.5),0 0 0 1px rgba(45,212,191,0.08)",
+          textAlign:"left"}}>
+          {/* Fake browser chrome */}
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:14,paddingBottom:12,
+            borderBottom:`1px solid ${C.border}`}}>
+            {["#f87171","#fbbf24","#4ade80"].map((c,i)=>(
+              <div key={i} style={{width:10,height:10,borderRadius:"50%",background:c}}/>
+            ))}
+            <div style={{flex:1,background:C.surface,borderRadius:6,padding:"4px 12px",
+              fontSize:10,color:C.textMuted,marginLeft:8}}>
+              skyshield-sigma.vercel.app
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:12}}>
+            {[{l:"Active Leads",v:"24",c:C.orange},{l:"Booked Today",v:"7",c:"#2dd4bf"},{l:"MRR",v:"$2,388",c:"#4ade80"},{l:"Storms",v:"3",c:C.blue}].map(s=>(
+              <div key={s.l} style={{background:C.surface,borderRadius:10,padding:"12px 14px",border:`1px solid ${C.border}`}}>
                 <div style={{fontSize:9,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{s.l}</div>
                 <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:22,fontWeight:700,color:s.c}}>{s.v}</div>
               </div>
@@ -1693,7 +1817,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
           <div style={{display:"grid",gridTemplateColumns:"1.4fr 1fr",gap:10}}>
             <div style={{background:C.surface,borderRadius:10,border:`1px solid ${C.border}`,overflow:"hidden"}}>
               <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,fontSize:11,fontWeight:600,color:C.textSub}}>Lead Pipeline</div>
-              {[{n:"Robert Chen",s:"scheduled",c:C.green},{n:"Linda Park",s:"contacted",c:C.blue},{n:"Tom Wiley",s:"pending",c:C.orange}].map((l,i)=>(
+              {[{n:"Robert Chen",s:"scheduled",c:"#2dd4bf"},{n:"Linda Park",s:"contacted",c:C.blue},{n:"Tom Wiley",s:"pending",c:C.orange}].map((l,i)=>(
                 <div key={i} style={{padding:"9px 14px",borderBottom:i<2?`1px solid ${C.border}`:"none",
                   display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -1710,7 +1834,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
             </div>
             <div style={{background:C.surface,borderRadius:10,border:`1px solid ${C.border}`,overflow:"hidden"}}>
               <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,fontSize:11,fontWeight:600,color:C.textSub}}>Storm Events</div>
-              {[{n:"Hail — Plano, TX",d:"Jun 12",s:"severe"},{n:"Tornado — Frisco, TX",d:"Jun 13",s:"extreme"},{n:"Wind — Allen, TX",d:"Jun 14",s:"moderate"}].map((s,i)=>(
+              {[{n:"Hail — Plano, TX",d:"Jun 12",s:"severe"},{n:"Tornado — Frisco",d:"Jun 13",s:"extreme"},{n:"Wind — Allen",d:"Jun 14",s:"moderate"}].map((s,i)=>(
                 <div key={i} style={{padding:"9px 14px",borderBottom:i<2?`1px solid ${C.border}`:"none",
                   display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                   <div>
@@ -1718,9 +1842,8 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
                     <div style={{fontSize:9,color:C.textSub,marginTop:1}}>{s.d}</div>
                   </div>
                   <span style={{fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:5,
-                    background:s.s==="extreme"?`${C.red}14`:s.s==="severe"?`${C.orange}14`:`${C.blue}14`,
-                    color:s.s==="extreme"?C.red:s.s==="severe"?C.orange:C.blue,
-                    border:`1px solid ${s.s==="extreme"?C.red:s.s==="severe"?C.orange:C.blue}28`}}>{s.s}</span>
+                    background:`${sevColor(s.s)}14`,color:sevColor(s.s),
+                    border:`1px solid ${sevColor(s.s)}28`}}>{s.s}</span>
                 </div>
               ))}
             </div>
@@ -1729,107 +1852,248 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
       </section>
 
       {/* ── FEATURES ── */}
-      <section id="features" style={{maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
+      <section id="features" style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
         <div style={{textAlign:"center",marginBottom:56}}>
           <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Everything You Need</div>
-          <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:38,fontWeight:800,
+          <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:40,fontWeight:800,
             letterSpacing:"-0.02em",color:"#fff",marginBottom:14}}>Built for how roofing actually works</h2>
           <p style={{fontSize:16,color:C.textSub,maxWidth:520,margin:"0 auto"}}>
             Every feature was designed around the storm response workflow — from first alert to closed deal.
           </p>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
-          {FEATURES.map(f=>(
-            <div key={f.title} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:24,
-              backdropFilter:"blur(20px)"}}>
-              <div style={{width:38,height:38,borderRadius:10,background:`${C.orange}14`,
-                border:`1px solid ${C.orange}28`,display:"flex",alignItems:"center",justifyContent:"center",
-                fontSize:16,fontWeight:700,color:C.orange,marginBottom:14}}>{f.icon}</div>
-              <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:15,fontWeight:700,color:"#fff",marginBottom:8}}>{f.title}</div>
-              <div style={{fontSize:13,color:C.textSub,lineHeight:1.6}}>{f.desc}</div>
+          {FEATURES.map((f,fi)=>(
+            <div key={f.title} style={{background:"rgba(255,255,255,0.03)",backdropFilter:"blur(20px)",
+              border:`1px solid rgba(255,255,255,0.07)`,borderRadius:16,padding:28,
+              boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06)",
+              transition:"border-color 0.2s,box-shadow 0.2s"}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor=`${C.orange}44`;e.currentTarget.style.boxShadow=`0 0 30px ${C.orange}11,inset 0 1px 0 rgba(255,255,255,0.08)`;}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor="rgba(255,255,255,0.07)";e.currentTarget.style.boxShadow="inset 0 1px 0 rgba(255,255,255,0.06)";}}>
+              <div style={{width:44,height:44,borderRadius:12,
+                background:`linear-gradient(135deg,${C.orange}22,${C.orange}11)`,
+                border:`1px solid ${C.orange}28`,
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:18,fontWeight:700,color:C.orange,marginBottom:16}}>{f.icon}</div>
+              <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:16,fontWeight:700,color:"#fff",marginBottom:8}}>{f.title}</div>
+              <div style={{fontSize:13,color:C.textSub,lineHeight:1.7}}>{f.desc}</div>
             </div>
           ))}
         </div>
       </section>
 
       {/* ── HOW IT WORKS ── */}
-      <section style={{background:`${C.orange}06`,borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"80px 24px"}}>
+      <section style={{position:"relative",zIndex:1,background:"rgba(255,255,255,0.015)",
+        borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"80px 24px"}}>
         <div style={{maxWidth:1100,margin:"0 auto"}}>
-          <div style={{textAlign:"center",marginBottom:56}}>
+          <div style={{textAlign:"center",marginBottom:64}}>
             <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>The Workflow</div>
-            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:38,fontWeight:800,letterSpacing:"-0.02em",color:"#fff"}}>
+            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:40,fontWeight:800,letterSpacing:"-0.02em",color:"#fff"}}>
               Storm to signed deal in hours, not days
             </h2>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:0,position:"relative"}}>
-            <div style={{position:"absolute",top:28,left:"12.5%",right:"12.5%",height:1,
-              background:`linear-gradient(90deg,${C.orange}44,${C.blue}44)`,zIndex:0}}/>
+
+          {/* Steps with connecting line */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:0,position:"relative",marginBottom:64}}>
+            <div style={{position:"absolute",top:27,left:"12.5%",right:"12.5%",height:1,
+              background:`linear-gradient(90deg,${C.orange}66,${C.blue}66)`,zIndex:0}}/>
             {[
-              {n:"01",t:"Storm Detected",d:"SkyShield scans for hail, tornado, and wind events in your ZIP codes — automatically, around the clock."},
-              {n:"02",t:"Leads Generated",d:"Homeowners in affected areas are identified and added to your pipeline instantly."},
-              {n:"03",t:"AI Contacts Them",d:"Personalized SMS goes out within minutes. AI qualifies the lead and books the inspection."},
-              {n:"04",t:"Inspection Booked",d:"Once qualified, the AI offers available times and books directly into your inspector's calendar."},
+              {n:"01",t:"Storm Detected",d:"SkyShield scans for hail, tornado, and wind events in your ZIP codes around the clock.",icon:"◆"},
+              {n:"02",t:"Leads Generated",d:"Homeowners in affected areas are identified and added to your pipeline instantly.",icon:"◈"},
+              {n:"03",t:"AI Contacts Them",d:"Personalized SMS goes out within minutes. AI qualifies the lead and books the inspection.",icon:"→"},
+              {n:"04",t:"Inspection Booked",d:"Confirmed bookings land in your inspector's calendar. You just show up and close.",icon:"▦"},
             ].map((s,i)=>(
               <div key={i} style={{padding:"0 20px",textAlign:"center",position:"relative",zIndex:1}}>
                 <div style={{width:56,height:56,borderRadius:"50%",
-                  background:i===0||i===3?"linear-gradient(135deg,#0d9488,#0284c7)":C.card,
-                  border:`1px solid ${i===0||i===3?C.orange:C.border}`,
+                  background:i%2===0?"linear-gradient(135deg,#0d9488,#0284c7)":"rgba(7,24,40,0.9)",
+                  border:`1px solid ${i%2===0?C.orange:C.border}`,
                   display:"flex",alignItems:"center",justifyContent:"center",
-                  fontFamily:"'Space Grotesk',sans-serif",fontSize:16,fontWeight:800,
-                  color:i===0||i===3?"#fff":C.textSub,
+                  fontFamily:"'Space Grotesk',sans-serif",fontSize:15,fontWeight:800,
+                  color:i%2===0?"#fff":C.textSub,
                   margin:"0 auto 20px",
-                  boxShadow:i===0||i===3?"0 8px 24px rgba(13,148,136,0.4)":"none"}}>
+                  boxShadow:i%2===0?"0 8px 24px rgba(13,148,136,0.4)":"none"}}>
                   {s.n}
                 </div>
+                <div style={{width:32,height:32,borderRadius:8,background:`${C.orange}14`,
+                  border:`1px solid ${C.orange}28`,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:14,color:C.orange,margin:"0 auto 12px"}}>{s.icon}</div>
                 <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:15,fontWeight:700,color:"#fff",marginBottom:8}}>{s.t}</div>
-                <div style={{fontSize:13,color:C.textSub,lineHeight:1.6}}>{s.desc||s.d}</div>
+                <div style={{fontSize:13,color:C.textSub,lineHeight:1.6}}>{s.d}</div>
               </div>
             ))}
+          </div>
+
+          {/* ── STORM MAP + SMS MOCKUP side by side ── */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+
+            {/* Animated Storm Map */}
+            <div style={{background:"rgba(7,24,40,0.9)",border:`1px solid ${C.border}`,borderRadius:16,padding:20,
+              boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06)"}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",
+                letterSpacing:"0.08em",marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{width:6,height:6,borderRadius:"50%",background:"#f87171",
+                  display:"inline-block",animation:"pulse 1s ease-in-out infinite"}}/>
+                Live Storm Detection
+              </div>
+              {/* Map SVG */}
+              <div style={{position:"relative",height:200,background:"rgba(13,148,136,0.04)",
+                borderRadius:10,border:`1px solid ${C.border}`,overflow:"hidden"}}>
+                {/* Grid lines */}
+                <svg width="100%" height="100%" style={{position:"absolute",inset:0}}>
+                  {[20,40,60,80].map(p=>(
+                    <g key={p}>
+                      <line x1={`${p}%`} y1="0" x2={`${p}%`} y2="100%" stroke="rgba(45,212,191,0.08)" strokeWidth="1"/>
+                      <line x1="0" y1={`${p}%`} x2="100%" y2={`${p}%`} stroke="rgba(45,212,191,0.08)" strokeWidth="1"/>
+                    </g>
+                  ))}
+                  {/* State outline suggestion */}
+                  <path d="M 20 40 L 80 35 L 85 80 L 25 85 Z" fill="rgba(45,212,191,0.03)" stroke="rgba(45,212,191,0.15)" strokeWidth="1"/>
+                </svg>
+                {/* Animated storm dots */}
+                {mapDots.map(dot=>(
+                  <div key={dot.id} style={{position:"absolute",left:`${dot.x}%`,top:`${dot.y}%`,transform:"translate(-50%,-50%)"}}>
+                    {/* Ripple */}
+                    <div style={{position:"absolute",width:30,height:30,borderRadius:"50%",
+                      border:`1px solid ${sevColor(dot.severity)}`,
+                      top:"50%",left:"50%",transform:"translate(-50%,-50%)",
+                      animation:"ripple 1.5s ease-out infinite"}}/>
+                    {/* Core dot */}
+                    <div style={{width:10,height:10,borderRadius:"50%",
+                      background:sevColor(dot.severity),
+                      boxShadow:`0 0 10px ${sevColor(dot.severity)}`,
+                      position:"relative",zIndex:1}}/>
+                    {/* Label */}
+                    <div style={{position:"absolute",top:14,left:"50%",transform:"translateX(-50%)",
+                      fontSize:8,fontWeight:700,color:sevColor(dot.severity),whiteSpace:"nowrap",
+                      background:"rgba(3,14,24,0.8)",padding:"1px 4px",borderRadius:3}}>
+                      {dot.label}
+                    </div>
+                  </div>
+                ))}
+                {/* Legend */}
+                <div style={{position:"absolute",bottom:10,right:10,
+                  background:"rgba(3,14,24,0.9)",borderRadius:6,padding:"6px 8px",
+                  border:`1px solid ${C.border}`,display:"flex",flexDirection:"column",gap:4}}>
+                  {[{c:"#f87171",l:"Extreme"},{c:"#fbbf24",l:"Severe"},{c:"#38bdf8",l:"Moderate"}].map(item=>(
+                    <div key={item.l} style={{display:"flex",alignItems:"center",gap:5}}>
+                      <div style={{width:7,height:7,borderRadius:"50%",background:item.c,
+                        boxShadow:`0 0 4px ${item.c}`}}/>
+                      <span style={{fontSize:9,color:C.textSub}}>{item.l}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{marginTop:12,fontSize:12,color:C.textSub,lineHeight:1.5}}>
+                Storm events detected in real time. Leads auto-generated for every affected ZIP code.
+              </div>
+            </div>
+
+            {/* SMS Phone Mockup */}
+            <div style={{background:"rgba(7,24,40,0.9)",border:`1px solid ${C.border}`,borderRadius:16,padding:20,
+              boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06)"}}>
+              <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",
+                letterSpacing:"0.08em",marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{width:6,height:6,borderRadius:"50%",background:"#4ade80",
+                  display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}/>
+                AI Lead Conversation
+              </div>
+              {/* Phone frame */}
+              <div style={{background:"#060a10",borderRadius:20,border:`2px solid #1a2535`,
+                padding:"12px 8px",maxWidth:280,margin:"0 auto",minHeight:200}}>
+                {/* Phone notch */}
+                <div style={{width:60,height:4,background:"#1a2535",borderRadius:4,margin:"0 auto 12px"}}/>
+                {/* Contact header */}
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"0 8px 10px",
+                  borderBottom:"1px solid #1a2535",marginBottom:10}}>
+                  <div style={{width:28,height:28,borderRadius:"50%",
+                    background:"linear-gradient(135deg,rgba(13,148,136,0.5),rgba(2,132,199,0.4))",
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:"#2dd4bf"}}>S</div>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:600,color:"#fff"}}>Sarah M. · 75023</div>
+                    <div style={{fontSize:9,color:"#4ade80"}}>● AI Assistant Active</div>
+                  </div>
+                </div>
+                {/* Messages */}
+                <div style={{display:"flex",flexDirection:"column",gap:8,padding:"0 8px"}}>
+                  {SMS_STEPS.slice(0,smsStep).map((msg,i)=>(
+                    <div key={i} style={{
+                      maxWidth:"85%",
+                      alignSelf:msg.role==="ai"?"flex-start":"flex-end",
+                      background:msg.role==="ai"?"rgba(13,148,136,0.2)":"rgba(56,189,248,0.15)",
+                      border:`1px solid ${msg.role==="ai"?"rgba(45,212,191,0.3)":"rgba(56,189,248,0.25)"}`,
+                      borderRadius:msg.role==="ai"?"10px 10px 10px 3px":"10px 10px 3px 10px",
+                      padding:"7px 10px",
+                      fontSize:10,lineHeight:1.5,color:"#e2f8f8",
+                      animation:"slideIn 0.3s ease forwards",
+                    }}>{msg.msg}</div>
+                  ))}
+                  {smsStep<SMS_STEPS.length&&smsStep>0&&(
+                    <div style={{alignSelf:"flex-start",display:"flex",gap:3,padding:"8px 10px",
+                      background:"rgba(13,148,136,0.1)",borderRadius:"10px 10px 10px 3px",
+                      border:"1px solid rgba(45,212,191,0.2)"}}>
+                      {[0,1,2].map(i=>(
+                        <div key={i} style={{width:5,height:5,borderRadius:"50%",background:"#2dd4bf",
+                          animation:`pulse ${0.6+i*0.2}s ease-in-out infinite alternate`}}/>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div style={{marginTop:12,fontSize:12,color:C.textSub,lineHeight:1.5,textAlign:"center"}}>
+                AI replies instantly, 24/7. No manual effort required.
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       {/* ── PRICING ── */}
-      <section id="pricing" style={{maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
+      <section id="pricing" style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
         <div style={{textAlign:"center",marginBottom:56}}>
           <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Simple Pricing</div>
-          <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:38,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:14}}>
+          <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:40,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:14}}>
             Start free. Upgrade when ready.
           </h2>
           <p style={{fontSize:16,color:C.textSub}}>14-day free trial on all plans. No credit card required.</p>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
           {PLANS.map(p=>(
-            <div key={p.name} style={{background:C.card,border:`1px solid ${p.popular?p.color+"55":C.border}`,
-              borderRadius:16,padding:28,position:"relative",
-              backdropFilter:"blur(20px)",
-              boxShadow:p.popular?`0 0 40px ${p.color}22`:"none"}}>
-              {p.popular&&<div style={{position:"absolute",top:-12,left:"50%",transform:"translateX(-50%)",
-                background:`linear-gradient(135deg,#0d9488,#0284c7)`,color:"#fff",
-                fontSize:10,fontWeight:700,padding:"4px 14px",borderRadius:20,
-                textTransform:"uppercase",letterSpacing:"0.06em",whiteSpace:"nowrap"}}>
+            <div key={p.name} style={{background:"rgba(255,255,255,0.03)",backdropFilter:"blur(20px)",
+              border:`1px solid ${p.popular?p.color+"55":C.border}`,
+              borderRadius:18,padding:30,position:"relative",
+              boxShadow:p.popular?`0 0 60px ${p.color}18,inset 0 1px 0 rgba(255,255,255,0.08)`:"inset 0 1px 0 rgba(255,255,255,0.05)"}}>
+              {p.popular&&<div style={{position:"absolute",top:-13,left:"50%",transform:"translateX(-50%)",
+                background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",
+                fontSize:10,fontWeight:700,padding:"4px 16px",borderRadius:20,
+                textTransform:"uppercase",letterSpacing:"0.06em",whiteSpace:"nowrap",
+                boxShadow:"0 4px 14px rgba(13,148,136,0.4)"}}>
                 Most Popular
               </div>}
-              <div style={{fontSize:14,fontWeight:700,color:p.color,marginBottom:16,textTransform:"uppercase",letterSpacing:"0.06em"}}>{p.name}</div>
-              <div style={{display:"flex",alignItems:"baseline",gap:4,marginBottom:6}}>
-                <span style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:42,fontWeight:800,color:"#fff"}}>${p.price}</span>
+              <div style={{fontSize:13,fontWeight:700,color:p.color,marginBottom:18,
+                textTransform:"uppercase",letterSpacing:"0.08em"}}>{p.name}</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:4,marginBottom:4}}>
+                <span style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:44,fontWeight:800,color:"#fff"}}>${p.price}</span>
                 <span style={{fontSize:13,color:C.textSub}}>/month</span>
               </div>
-              <div style={{fontSize:12,color:C.textMuted,marginBottom:24}}>after free trial</div>
-              <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:28}}>
+              <div style={{fontSize:12,color:C.textMuted,marginBottom:24}}>after 14-day free trial</div>
+              <div style={{height:1,background:C.border,marginBottom:20}}/>
+              <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:28}}>
                 {p.features.map(f=>(
                   <div key={f} style={{display:"flex",alignItems:"flex-start",gap:10}}>
-                    <span style={{color:p.color,fontSize:12,flexShrink:0,marginTop:1}}>✓</span>
+                    <div style={{width:18,height:18,borderRadius:5,background:`${p.color}14`,
+                      border:`1px solid ${p.color}28`,display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:9,color:p.color,flexShrink:0,marginTop:1}}>✓</div>
                     <span style={{fontSize:13,color:C.textSub,lineHeight:1.4}}>{f}</span>
                   </div>
                 ))}
               </div>
-              <button onClick={()=>setShowDemoForm(true)} style={{width:"100%",fontSize:14,fontWeight:600,
-                padding:"12px 0",borderRadius:9,cursor:"pointer",
+              <button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
+                style={{width:"100%",fontSize:14,fontWeight:600,
+                padding:"13px 0",borderRadius:10,cursor:"pointer",
                 background:p.popular?"linear-gradient(135deg,#0d9488,#0284c7)":"transparent",
                 color:p.popular?"#fff":p.color,
                 border:p.popular?"none":`1px solid ${p.color}44`,
-                boxShadow:p.popular?"0 4px 14px rgba(13,148,136,0.35)":"none"}}>
+                boxShadow:p.popular?"0 4px 16px rgba(13,148,136,0.4)":"none"}}>
                 Start Free Trial
               </button>
             </div>
@@ -1838,21 +2102,31 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
       </section>
 
       {/* ── TESTIMONIALS ── */}
-      <section style={{background:`${C.card}`,borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"80px 24px"}}>
+      <section style={{position:"relative",zIndex:1,background:"rgba(255,255,255,0.015)",
+        borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"80px 24px"}}>
         <div style={{maxWidth:1100,margin:"0 auto"}}>
           <div style={{textAlign:"center",marginBottom:48}}>
             <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>What Roofers Say</div>
-            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:34,fontWeight:800,letterSpacing:"-0.02em",color:"#fff"}}>
+            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:36,fontWeight:800,letterSpacing:"-0.02em",color:"#fff"}}>
               Real results from real roofing companies
             </h2>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
             {TESTIMONIALS.map(t=>(
-              <div key={t.name} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:24}}>
+              <div key={t.name} style={{background:"rgba(7,24,40,0.9)",border:`1px solid ${C.border}`,
+                borderRadius:16,padding:28,
+                boxShadow:"inset 0 1px 0 rgba(255,255,255,0.05)"}}>
+                {/* Stars */}
+                <div style={{display:"flex",gap:3,marginBottom:16}}>
+                  {[1,2,3,4,5].map(i=>(
+                    <div key={i} style={{color:C.amber,fontSize:14}}>★</div>
+                  ))}
+                </div>
                 <div style={{fontSize:13,color:C.textSub,lineHeight:1.7,marginBottom:20,fontStyle:"italic"}}>
                   "{t.text}"
                 </div>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,paddingTop:16,
+                  borderTop:`1px solid ${C.border}`}}>
                   <div style={{width:36,height:36,borderRadius:10,
                     background:"linear-gradient(135deg,rgba(13,148,136,0.4),rgba(2,132,199,0.3))",
                     border:`1px solid ${C.border}`,
@@ -1871,77 +2145,94 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
         </div>
       </section>
 
-      {/* ── CONTACT / DEMO FORM ── */}
-      <section id="contact" style={{maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
+      {/* ── CONTACT / CTA ── */}
+      <section id="contact" style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:60,alignItems:"center"}}>
           <div>
             <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Get Started</div>
-            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:36,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:16,lineHeight:1.2}}>
+            <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:38,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:16,lineHeight:1.15}}>
               Ready to capture more storm leads?
             </h2>
-            <p style={{fontSize:15,color:C.textSub,lineHeight:1.7,marginBottom:24}}>
+            <p style={{fontSize:15,color:C.textSub,lineHeight:1.7,marginBottom:28}}>
               Start your free 14-day trial today or book a demo and we'll walk you through the entire platform live.
             </p>
-            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{display:"flex",flexDirection:"column",gap:16}}>
               {[
-                {t:"14-day free trial",d:"Full access to all features, no credit card needed"},
-                {t:"Live demo available",d:"See the platform in action with your own data"},
-                {t:"Same-day onboarding",d:"We'll get you set up and running within hours"},
+                {icon:"◆",t:"14-day free trial",d:"Full access to all features, no credit card needed"},
+                {icon:"◈",t:"Live demo available",d:"See the platform in action with your own data"},
+                {icon:"▦",t:"Same-day onboarding",d:"We'll get you set up and running within hours"},
               ].map(item=>(
-                <div key={item.t} style={{display:"flex",alignItems:"flex-start",gap:12}}>
-                  <div style={{width:20,height:20,borderRadius:6,background:`${C.orange}14`,
-                    border:`1px solid ${C.orange}28`,display:"flex",alignItems:"center",justifyContent:"center",
-                    fontSize:10,color:C.orange,flexShrink:0,marginTop:1}}>✓</div>
-                  <div>
-                    <div style={{fontSize:13,fontWeight:600,color:"#fff"}}>{item.t}</div>
-                    <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{item.d}</div>
+                <div key={item.t} style={{display:"flex",alignItems:"flex-start",gap:14}}>
+                  <div style={{width:36,height:36,borderRadius:10,
+                    background:"linear-gradient(135deg,rgba(13,148,136,0.3),rgba(2,132,199,0.2))",
+                    border:`1px solid ${C.orange}33`,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    fontSize:14,color:C.orange,flexShrink:0}}>
+                    {item.icon}
+                  </div>
+                  <div style={{paddingTop:2}}>
+                    <div style={{fontSize:14,fontWeight:600,color:"#fff",marginBottom:2}}>{item.t}</div>
+                    <div style={{fontSize:12,color:C.textSub}}>{item.d}</div>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Contact form */}
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:32,backdropFilter:"blur(20px)"}}>
+          {/* Form */}
+          <div style={{background:"rgba(7,24,40,0.95)",border:`1px solid ${C.borderAct}`,
+            borderRadius:18,padding:34,backdropFilter:"blur(20px)",
+            boxShadow:`0 0 60px rgba(45,212,191,0.08),inset 0 1px 0 rgba(255,255,255,0.07)`}}>
             {demoSent
               ? <div style={{textAlign:"center",padding:"20px 0"}}>
-                  <div style={{width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#0d9488,#0284c7)",
-                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,margin:"0 auto 16px",
-                    boxShadow:"0 8px 24px rgba(13,148,136,0.4)"}}>✓</div>
-                  <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:700,color:"#fff",marginBottom:8}}>You're on the list!</div>
-                  <div style={{fontSize:13,color:C.textSub,lineHeight:1.6}}>
-                    Noah will reach out within 24 hours to get you set up. Check your email for confirmation.
+                  <div style={{width:56,height:56,borderRadius:16,
+                    background:"linear-gradient(135deg,#0d9488,#0284c7)",
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,
+                    margin:"0 auto 18px",boxShadow:"0 8px 24px rgba(13,148,136,0.4)"}}>✓</div>
+                  <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:20,fontWeight:700,color:"#fff",marginBottom:8}}>You're on the list!</div>
+                  <div style={{fontSize:13,color:C.textSub,lineHeight:1.6,marginBottom:24}}>
+                    Noah will reach out within 24 hours to get you set up.
                   </div>
-                  <button onClick={onSignIn} style={{marginTop:20,fontSize:13,fontWeight:600,padding:"10px 24px",
-                    borderRadius:8,background:`linear-gradient(135deg,#0d9488,#0284c7)`,
-                    color:"#fff",border:"none",cursor:"pointer"}}>
+                  <button onClick={onSignIn} style={{fontSize:13,fontWeight:600,padding:"11px 28px",
+                    borderRadius:9,background:"linear-gradient(135deg,#0d9488,#0284c7)",
+                    color:"#fff",border:"none",cursor:"pointer",
+                    boxShadow:"0 4px 14px rgba(13,148,136,0.35)"}}>
                     Sign In to Your Trial
                   </button>
                 </div>
               : <>
-                  <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:700,color:"#fff",marginBottom:4}}>Start Free Trial / Book a Demo</div>
-                  <div style={{fontSize:12,color:C.textSub,marginBottom:20}}>No credit card · 14 days free · Cancel anytime</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:20,fontWeight:700,color:"#fff",marginBottom:4}}>
+                    Start Free Trial / Book a Demo
+                  </div>
+                  <div style={{fontSize:12,color:C.textSub,marginBottom:22}}>
+                    No credit card · 14 days free · Cancel anytime
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:14}}>
                     {[
                       {label:"Your Name",val:demoName,set:setDemoName,ph:"Marcus Holt"},
                       {label:"Email Address",val:demoEmail,set:setDemoEmail,ph:"marcus@yourcompany.com"},
                       {label:"Phone Number",val:demoPhone,set:setDemoPhone,ph:"972-555-0101"},
                     ].map(f=>(
                       <div key={f.label}>
-                        <div style={{fontSize:11,fontWeight:600,color:C.textSub,marginBottom:5,textTransform:"uppercase",letterSpacing:"0.06em"}}>{f.label}</div>
+                        <div style={{fontSize:10,fontWeight:600,color:C.textSub,marginBottom:5,
+                          textTransform:"uppercase",letterSpacing:"0.08em"}}>{f.label}</div>
                         <input value={f.val} onChange={e=>f.set(e.target.value)}
                           placeholder={f.ph}
-                          style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
-                            borderRadius:8,padding:"10px 12px",color:C.text,fontSize:13,outline:"none"}}/>
+                          style={{width:"100%",background:"rgba(255,255,255,0.04)",
+                            border:`1px solid ${C.border}`,borderRadius:9,
+                            padding:"11px 14px",color:C.text,fontSize:13,outline:"none",
+                            transition:"border-color 0.15s"}}
+                          onFocus={e=>e.target.style.borderColor=C.orange+"66"}
+                          onBlur={e=>e.target.style.borderColor=C.border}/>
                       </div>
                     ))}
                     <button onClick={()=>{
                       if(!demoName||!demoEmail){alert("Please enter your name and email.");return;}
                       setDemoSent(true);
-                    }} style={{fontSize:14,fontWeight:700,padding:"13px 0",borderRadius:9,
+                    }} style={{fontSize:14,fontWeight:700,padding:"14px 0",borderRadius:10,
                       background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",border:"none",
                       cursor:"pointer",marginTop:4,
-                      boxShadow:"0 4px 14px rgba(13,148,136,0.35)"}}>
+                      boxShadow:"0 4px 16px rgba(13,148,136,0.4)"}}>
                       Get Started Free →
                     </button>
                     <div style={{fontSize:11,color:C.textMuted,textAlign:"center"}}>
@@ -1955,8 +2246,9 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
       </section>
 
       {/* ── FOOTER ── */}
-      <footer style={{borderTop:`1px solid ${C.border}`,padding:"32px 24px"}}>
-        <div style={{maxWidth:1100,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
+      <footer style={{position:"relative",zIndex:1,borderTop:`1px solid ${C.border}`,padding:"32px 24px"}}>
+        <div style={{maxWidth:1100,margin:"0 auto",display:"flex",alignItems:"center",
+          justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:26,height:26,borderRadius:7,background:"linear-gradient(135deg,#0d9488,#0284c7)",
               display:"flex",alignItems:"center",justifyContent:"center",fontSize:13}}>⛈</div>
@@ -1980,6 +2272,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
     </div>
   );
 }
+
 
 function LoginScreen({onLoginSuccess}){
   const[view,setView]=useState("signin"); // signin | forgot | sent
