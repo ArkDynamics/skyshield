@@ -1576,7 +1576,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
 
   const FEATURES=[
     {icon:"◆",title:"Storm Intelligence",desc:"Automatically detects hail, tornado, and wind events in your service area and instantly generates leads from affected homeowners."},
-    {icon:"→",title:"AI-Powered Outreach",desc:"Sends personalized SMS to leads the moment a storm hits. AI handles replies, qualifies leads, and confirms adult presence before booking."},
+    {icon:"→",title:"AI-Powered Outreach",desc:"Sends personalized SMS to leads the moment a storm hits. AI handles replies, qualifies leads, and schedules inspections automatically."},
     {icon:"▦",title:"Smart Scheduling",desc:"Real-time availability engine books inspections without double-booking. Inspectors get notified instantly via SMS."},
     {icon:"◈",title:"Multi-Roofer CRM",desc:"Manage your entire team from one dashboard. Each roofer gets their own number, leads, calendar, and performance stats."},
     {icon:"$",title:"Stripe Billing Built In",desc:"Subscription management, invoicing, and payment tracking all handled automatically. Know your MRR at a glance."},
@@ -1767,7 +1767,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
             {[
               {n:"01",t:"Storm Detected",d:"SkyShield scans for hail, tornado, and wind events in your ZIP codes — automatically, around the clock."},
               {n:"02",t:"Leads Generated",d:"Homeowners in affected areas are identified and added to your pipeline instantly."},
-              {n:"03",t:"AI Contacts Them",d:"Personalized SMS goes out within minutes. AI qualifies the lead and confirms an adult will be home."},
+              {n:"03",t:"AI Contacts Them",d:"Personalized SMS goes out within minutes. AI qualifies the lead and books the inspection."},
               {n:"04",t:"Inspection Booked",d:"Once qualified, the AI offers available times and books directly into your inspector's calendar."},
             ].map((s,i)=>(
               <div key={i} style={{padding:"0 20px",textAlign:"center",position:"relative",zIndex:1}}>
