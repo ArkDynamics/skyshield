@@ -1972,7 +1972,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
             ))}
           </div>
           <div style={{fontSize:12,color:C.textMuted}}>
-            © {new Date().getFullYear()} Ark Dynamics · noah.arkdynamics@gmail.com
+            © {new Date().getFullYear()} Ark Dynamics · skyshieldpro@arkdynamics.io
           </div>
         </div>
       </footer>
