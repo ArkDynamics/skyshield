@@ -1,8 +1,7 @@
 // api/_lib.js — shared helpers for all Vercel API functions
-// This file is NOT a route (underscore prefix tells Vercel to skip it)
+// Uses native fetch (Node 18+) and native Stripe SDK
 
 const Stripe = require("stripe");
-
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -14,7 +13,6 @@ const PRICE_IDS = {
   Elite:   process.env.STRIPE_PRICE_ELITE,
 };
 
-// ── Supabase ─────────────────────────────────────────────────────────────────
 async function sbGet(table, filter) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}&select=*`, {
     headers: {
@@ -39,7 +37,6 @@ async function sbPatch(table, filter, data) {
   return res.json();
 }
 
-// ── Auth check ────────────────────────────────────────────────────────────────
 function checkAuth(req, res) {
   if (req.headers["x-skyshield-key"] !== process.env.SKYSHIELD_API_KEY) {
     res.status(401).json({ error: "Unauthorized" });
@@ -48,7 +45,6 @@ function checkAuth(req, res) {
   return true;
 }
 
-// ── CORS headers ──────────────────────────────────────────────────────────────
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", process.env.FRONTEND_URL || "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
