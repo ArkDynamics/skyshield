@@ -1342,6 +1342,55 @@ function EditLeadModal({lead,roofers,onClose,onSave}){
   </Modal>;
 }
 
+function AddLeadModal({roofers, defaultRooferId, onClose, onAdd}){
+  const[f,setF]=useState({
+    homeowner:"", phone:"", zip:"",
+    stormType:"Hail", status:"pending",
+    rooferId:defaultRooferId||roofers[0]?.id||"",
+    notes:"",
+  });
+  const u=k=>v=>setF(p=>({...p,[k]:v}));
+  function save(){
+    if(!f.homeowner.trim()){ alert("Enter the homeowner's name."); return; }
+    if(!f.zip.trim()){ alert("Enter a ZIP code."); return; }
+    if(!f.rooferId){ alert("Select a roofer to assign this lead to."); return; }
+    onAdd({
+      id:"l"+Date.now(),
+      homeowner:f.homeowner.trim(), phone:f.phone.trim(),
+      zip:f.zip.trim(), stormType:f.stormType||"Manual",
+      status:f.status, rooferId:f.rooferId,
+      notes:f.notes.trim(), conversations:[],
+      contactedAt:null, followupSent:false, adultConfirmed:"unconfirmed",
+    });
+    onClose();
+  }
+  return(
+    <Modal title="Add Lead" onClose={onClose}>
+      <div style={{display:"flex",flexDirection:"column",gap:13}}>
+        <Input label="Homeowner Name" value={f.homeowner} onChange={u("homeowner")} placeholder="Robert Chen"/>
+        <div style={grid("1fr 1fr",12)}>
+          <Input label="Phone" value={f.phone} onChange={u("phone")} placeholder="972-555-0101"/>
+          <Input label="ZIP Code" value={f.zip} onChange={u("zip")} placeholder="75023"/>
+        </div>
+        <div style={grid("1fr 1fr",12)}>
+          <Select label="Storm Type" value={f.stormType} onChange={u("stormType")}
+            options={["Hail","Wind","Tornado","Flood","Manual"]}/>
+          <Select label="Status" value={f.status} onChange={u("status")}
+            options={["pending","contacted","scheduled"]}/>
+        </div>
+        {roofers.length>1&&<Select label="Assign to Roofer" value={f.rooferId} onChange={u("rooferId")}
+          options={roofers.map(r=>({value:r.id,label:r.name}))}/>}
+        <Textarea label="Notes (optional)" value={f.notes} onChange={u("notes")}
+          placeholder="Any details about this lead..." rows={2}/>
+        <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
+          <Btn onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" onClick={save}>Add Lead</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function AddInspectorModal({onClose,onAdd}){
   const[f,setF]=useState({name:"",phone:"",zones:""});
   const u=k=>v=>setF(p=>({...p,[k]:v}));
@@ -2576,6 +2625,7 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
   const[viewingConvo,setViewingConvo]=useState(null);
   const[loggingRevenue,setLoggingRevenue]=useState(null);
   const[leadFilter,setLeadFilter]=useState("all");
+  const[showAddLead,setShowAddLead]=useState(false);
   const[newZip,setNewZip]=useState("");
 
   const myLeads=leads.filter(l=>l.rooferId===roofer.id);
@@ -2695,8 +2745,10 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
         <div style={flex(6)}>
           {pending.length>0&&<Btn variant="info" small onClick={()=>pending.forEach(l=>smsLead(l))}>SMS All Pending ({pending.length})</Btn>}
           <Btn variant="default" small onClick={()=>exportToCSV(filteredLeads,[roofer],roofer.name+"-leads.csv")}>⬇ CSV</Btn>
+          <Btn variant="primary" small onClick={()=>setShowAddLead(true)}>+ Add Lead</Btn>
         </div>
       </div>
+      {showAddLead&&<AddLeadModal roofers={[roofer]} defaultRooferId={roofer.id} onClose={()=>setShowAddLead(false)} onAdd={lead=>{onUpdate("add_lead",{lead});setShowAddLead(false);}}/>}
       <TableWrap headers={["Homeowner","Phone","ZIP","Storm","Status","Actions"]} empty={filteredLeads.length===0?"No leads match this filter.":undefined}>
         {filteredLeads.map(l=><LeadRow key={l.id} lead={l} roofers={[roofer]} onSMS={smsLead} onBook={bookLead} onEdit={setEditingLead} onDelete={l=>onUpdate("delete_lead",{leadId:l.id})} onViewConvo={setViewingConvo} onLogRevenue={setLoggingRevenue} showRoofer={false}/>)}
       </TableWrap>
@@ -2820,6 +2872,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
   const[statusFilter,setStatusFilter]=useState("all");
   const[rooferFilter,setRooferFilter]=useState("all");
   const[fetchingTwilio,setFetchingTwilio]=useState(false);
+  const[showAddLeadAdmin,setShowAddLeadAdmin]=useState(false);
 
   const totalMRR=roofers.filter(r=>r.status==="active").reduce((a,r)=>a+PLAN_PRICES[r.plan],0);
   const pending=leads.filter(l=>l.status==="pending");
@@ -3137,8 +3190,10 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           {pending.length>0&&<Btn variant="info" small onClick={async()=>{for(const l of pending)await smsLead(l);}}>SMS All Pending ({pending.length})</Btn>}
           <Btn small onClick={()=>exportToCSV(filteredLeads,roofers,"all-leads.csv")}>⬇ CSV</Btn>
           {apiKeys.twilio?.sid&&<Btn variant="ghost" small onClick={fetchTwilioIncoming} disabled={fetchingTwilio}>{fetchingTwilio?"Fetching...":"⟳ Fetch Replies"}</Btn>}
+          <Btn variant="primary" small onClick={()=>setShowAddLeadAdmin(true)}>+ Add Lead</Btn>
         </div>
       </div>
+      {showAddLeadAdmin&&<AddLeadModal roofers={roofers} onClose={()=>setShowAddLeadAdmin(false)} onAdd={lead=>{onUpdate("add_lead",{lead});setShowAddLeadAdmin(false);}}/>}
       <TableWrap headers={["Homeowner","Phone","ZIP","Roofer","Storm","Status","Actions"]} empty={filteredLeads.length===0?"No leads match this filter.":undefined}>
         {filteredLeads.map(l=><LeadRow key={l.id} lead={l} roofers={roofers} onSMS={smsLead} onBook={bookLead} onEdit={setEditingLead} onDelete={l=>onUpdate("delete_lead",{leadId:l.id})} onViewConvo={setViewingConvo} onLogRevenue={setLoggingRevenue} showRoofer={true}/>)}
       </TableWrap>
