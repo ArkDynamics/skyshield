@@ -92,10 +92,13 @@ function rooferToRow(r){
     stripe_customer_id:r.stripeCustomerId||null,
     stripe_subscription_id:r.stripeSubscriptionId||null,
     stripe_status:r.stripeStatus||"none",
+    zip_limit:r.zipLimit||PLAN_ZIP_LIMITS[r.plan]||10,
+    seat_limit:r.seatLimit||PLAN_SEAT_LIMITS[r.plan]||1,
+    billing_cycle:r.billingCycle||"monthly",
+    setup_fee_paid:!!r.setupFeePaid,
+    zip_bundle:r.zipBundle||null,
     updated_at:new Date().toISOString(),
   };
-  // Only include trial_started_at if it has a value — never send null
-  // to Supabase since merge-duplicates would overwrite the existing date.
   if(r.trialStartedAt) row.trial_started_at = r.trialStartedAt;
   return row;
 }
@@ -112,6 +115,11 @@ function rowToRoofer(row){
     stripeSubscriptionId:row.stripe_subscription_id||null,
     stripeStatus:row.stripe_status||"none",
     trialStartedAt:row.trial_started_at||null,
+    zipLimit:row.zip_limit||PLAN_ZIP_LIMITS[row.plan]||10,
+    seatLimit:row.seat_limit||PLAN_SEAT_LIMITS[row.plan]||1,
+    billingCycle:row.billing_cycle||"monthly",
+    setupFeePaid:!!row.setup_fee_paid,
+    zipBundle:row.zip_bundle||null,
   };
 }
 
@@ -182,11 +190,13 @@ function rowToStorm(row){
 
 async function loadAllData(){
   const token=getCurrentAccessToken();
-  const [rooferRows, leadRows, stormRows, appStateRows] = await Promise.all([
+  const [rooferRows, leadRows, stormRows, appStateRows, seatRows, zipRows] = await Promise.all([
     supabaseQuery("roofers", token, "?select=*"),
     supabaseQuery("leads", token, "?select=*"),
     supabaseQuery("storms", token, "?select=*"),
     supabaseQuery("app_state", token, "?id=eq.singleton&select=*"),
+    supabaseQuery("seats", token, "?select=*"),
+    supabaseQuery("zip_territories", token, "?select=*"),
   ]);
   const appState = Array.isArray(appStateRows) && appStateRows[0] ? appStateRows[0] : null;
   return {
@@ -197,6 +207,8 @@ async function loadAllData(){
     scanSettings: appState?.scan_settings || { interval:"daily", startTime:"07:00", lastScan:null },
     apiKeys: appState?.api_keys || {},
     lastSeenVersion: appState?.last_seen_version || "0.0.0",
+    seats: Array.isArray(seatRows) ? seatRows.map(r=>({id:r.id,account_id:r.account_id,email:r.email,name:r.name||"",role:r.role,status:r.status,permissionOverrides:r.permission_overrides||{}})) : [],
+    zipTerritories: Array.isArray(zipRows) ? zipRows : [],
   };
 }
 
@@ -322,8 +334,43 @@ const CHANGELOG = [
   },
 ];
 
-const PLAN_PRICES   = { Starter:297, Pro:497, Elite:997 };
-const PLAN_COLORS   = { Starter:C.blue, Pro:C.orange, Elite:C.purple, Trial:C.yellow };
+const PLAN_PRICES   = { Starter:1500, Pro:2000, Growth:2750 };
+const PLAN_PRICES_ANNUAL = { Starter:14997, Pro:19997, Growth:27497 };
+const PLAN_COLORS   = { Starter:C.blue, Pro:C.orange, Growth:C.purple, Trial:C.yellow };
+const PLAN_ZIP_LIMITS = { Starter:10, Pro:20, Growth:30 };
+const PLAN_SEAT_LIMITS = { Starter:1, Pro:1, Growth:3 };
+const SETUP_FEE = 500;
+
+const SEAT_ROLES = ["Owner","Office Manager","Sales Rep","Inspector"];
+
+// Permission matrix per role
+const ROLE_PERMISSIONS = {
+  "Owner":           { billing:true,  inviteSeats:true,  viewAllLeads:true,  assignLeads:true,  updateLeadStatus:true,  scheduleInspections:true,  viewInspections:true,  uploadInspectionNotes:true,  viewStormAlerts:true,  advancedReporting:true,  viewTerritories:true  },
+  "Office Manager":  { billing:false, inviteSeats:true,  viewAllLeads:true,  assignLeads:true,  updateLeadStatus:true,  scheduleInspections:true,  viewInspections:true,  uploadInspectionNotes:true,  viewStormAlerts:true,  advancedReporting:true,  viewTerritories:true  },
+  "Sales Rep":       { billing:false, inviteSeats:false, viewAllLeads:false, assignLeads:false, updateLeadStatus:true,  scheduleInspections:true,  viewInspections:true,  uploadInspectionNotes:false, viewStormAlerts:true,  advancedReporting:false, viewTerritories:true  },
+  "Inspector":       { billing:false, inviteSeats:false, viewAllLeads:false, assignLeads:false, updateLeadStatus:false, scheduleInspections:false, viewInspections:true,  uploadInspectionNotes:true,  viewStormAlerts:false, advancedReporting:false, viewTerritories:false },
+};
+
+const PERMISSION_LABELS = {
+  billing:"Billing & plan management",
+  inviteSeats:"Invite/remove seats",
+  viewAllLeads:"View all leads",
+  assignLeads:"Assign leads",
+  updateLeadStatus:"Update lead status",
+  scheduleInspections:"Schedule inspections",
+  viewInspections:"View inspections",
+  uploadInspectionNotes:"Upload inspection photos/notes",
+  viewStormAlerts:"View storm alerts",
+  advancedReporting:"Advanced reporting",
+  viewTerritories:"View territory/zips",
+};
+
+const ZIP_ADDONS = [
+  { id:"10-zip",  label:"10-Zip Bundle",    price:500,  original:null,  desc:"Add 10 ZIP codes to your territory" },
+  { id:"20-zip",  label:"20-Zip Bundle",    price:800,  original:1000,  desc:"Add 20 ZIP codes — 20% off",  savings:"Save $200/mo" },
+  { id:"metro",   label:"Metro Zone Lock",  price:1000, original:null,  desc:"Exclusively own a ZIP — per ZIP/mo" },
+  { id:"seat",    label:"Additional Seat",  price:50,   original:null,  desc:"Add a team member seat (max 5 extra)" },
+];
 const DAYS_OF_WEEK  = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const SCAN_INTERVALS= [
   {value:"manual",label:"Manual Only"},{value:"daily",label:"Once Daily"},
@@ -1641,10 +1688,34 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
     {icon:"◉",title:"Lead Pipeline",desc:"Track every lead from first contact to closed deal. Round-robin distribution ensures fair assignment across your team."},
   ];
 
+  const[billingCycle,setBillingCycle]=useState("monthly");
+
   const PLANS=[
-    {name:"Starter",price:297,features:["1 roofer seat","Storm scanning","SMS outreach","Lead pipeline","Calendar & scheduling"],color:C.blue},
-    {name:"Pro",price:497,popular:true,features:["3 roofer seats","Everything in Starter","AI auto-reply","Per-roofer SMS numbers","Revenue tracking"],color:C.orange},
-    {name:"Elite",price:997,features:["Unlimited seats","Everything in Pro","Priority support","Custom onboarding","API access","White-glove setup"],color:C.purple},
+    {name:"Starter",
+      monthly:1500, annual:14997, annualMonthly:1250,
+      color:C.blue,
+      features:["1 user","1 city","10 ZIP codes","Standard storm alerts","Lead dashboard","Inspection scheduling"],
+      zipLimit:10, seats:1,
+    },
+    {name:"Pro",
+      monthly:2000, annual:19997, annualMonthly:1666,
+      color:C.orange, popular:true,
+      features:["1 user","1 city","20 ZIP codes","Priority storm alerts","Lead dashboard","Inspection scheduling"],
+      zipLimit:20, seats:1,
+    },
+    {name:"Growth",
+      monthly:2750, annual:27497, annualMonthly:2291,
+      color:C.purple,
+      features:["3 users","2 cities","30 ZIP codes","Priority storm alerts","Lead dashboard","Inspection scheduling","Advanced reporting"],
+      zipLimit:30, seats:3,
+    },
+  ];
+
+  const LANDING_ADDONS=[
+    {label:"Additional Seat",price:"$50/mo",desc:"Add a team member seat",note:"Max 5 per account"},
+    {label:"10-Zip Bundle",price:"$500/mo",desc:"Expand your territory by 10 ZIPs",note:null},
+    {label:"20-Zip Bundle",price:"$800/mo",strikethrough:"$1,000/mo",desc:"Expand by 20 ZIPs",note:"Save 20%"},
+    {label:"Metro Zone Lock",price:"$1,000/mo per ZIP",desc:"Exclusively own a ZIP — no other roofers",note:"Removes all competitors from that ZIP"},
   ];
 
   const TESTIMONIALS=[
@@ -2052,60 +2123,131 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
 
       {/* ── PRICING ── */}
       <section id="pricing" style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
-        <div style={{textAlign:"center",marginBottom:56}}>
-          <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Simple Pricing</div>
+        <div style={{textAlign:"center",marginBottom:48}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Transparent Pricing</div>
           <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:40,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:14}}>
             Start free. Upgrade when ready.
           </h2>
-          <p style={{fontSize:16,color:C.textSub}}>14-day free trial on all plans. No credit card required.</p>
+          <p style={{fontSize:15,color:C.textSub,marginBottom:24}}>14-day free trial on all plans. No credit card required. One-time $500 setup fee.</p>
+          {/* Billing toggle */}
+          <div style={{display:"inline-flex",alignItems:"center",gap:0,
+            background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:30,padding:4}}>
+            <button onClick={()=>setBillingCycle("monthly")} style={{
+              padding:"8px 22px",borderRadius:26,fontSize:13,fontWeight:600,cursor:"pointer",border:"none",
+              background:billingCycle==="monthly"?"linear-gradient(135deg,#0d9488,#0284c7)":"transparent",
+              color:billingCycle==="monthly"?"#fff":C.textSub}}>
+              Monthly
+            </button>
+            <button onClick={()=>setBillingCycle("annual")} style={{
+              padding:"8px 22px",borderRadius:26,fontSize:13,fontWeight:600,cursor:"pointer",border:"none",
+              background:billingCycle==="annual"?"linear-gradient(135deg,#0d9488,#0284c7)":"transparent",
+              color:billingCycle==="annual"?"#fff":C.textSub,display:"flex",alignItems:"center",gap:8}}>
+              Annual
+              <span style={{fontSize:10,fontWeight:700,background:C.green,color:"#000",
+                padding:"2px 8px",borderRadius:10}}>Save 2 months</span>
+            </button>
+          </div>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
-          {PLANS.map(p=>(
-            <div key={p.name} style={{background:"rgba(255,255,255,0.03)",backdropFilter:"blur(20px)",
-              border:`1px solid ${p.popular?p.color+"55":C.border}`,
-              borderRadius:18,padding:30,position:"relative",
-              boxShadow:p.popular?`0 0 60px ${p.color}18,inset 0 1px 0 rgba(255,255,255,0.08)`:"inset 0 1px 0 rgba(255,255,255,0.05)"}}>
-              {p.popular&&<div style={{position:"absolute",top:-13,left:"50%",transform:"translateX(-50%)",
-                background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",
-                fontSize:10,fontWeight:700,padding:"4px 16px",borderRadius:20,
-                textTransform:"uppercase",letterSpacing:"0.06em",whiteSpace:"nowrap",
-                boxShadow:"0 4px 14px rgba(13,148,136,0.4)"}}>
-                Most Popular
-              </div>}
-              <div style={{fontSize:13,fontWeight:700,color:p.color,marginBottom:18,
-                textTransform:"uppercase",letterSpacing:"0.08em"}}>{p.name}</div>
-              <div style={{display:"flex",alignItems:"baseline",gap:4,marginBottom:4}}>
-                <span style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:44,fontWeight:800,color:"#fff"}}>${p.price}</span>
-                <span style={{fontSize:13,color:C.textSub}}>/month</span>
+
+        {/* Plan cards */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:40}}>
+          {PLANS.map(p=>{
+            const price = billingCycle==="monthly" ? p.monthly : p.annual;
+            const monthlyEquiv = billingCycle==="annual" ? p.annualMonthly : null;
+            return(
+              <div key={p.name} style={{background:"rgba(255,255,255,0.03)",backdropFilter:"blur(20px)",
+                border:`1px solid ${p.popular?p.color+"55":C.border}`,
+                borderRadius:18,padding:30,position:"relative",
+                boxShadow:p.popular?`0 0 60px ${p.color}18,inset 0 1px 0 rgba(255,255,255,0.08)`:"inset 0 1px 0 rgba(255,255,255,0.05)"}}>
+                {p.popular&&<div style={{position:"absolute",top:-13,left:"50%",transform:"translateX(-50%)",
+                  background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",
+                  fontSize:10,fontWeight:700,padding:"4px 16px",borderRadius:20,
+                  textTransform:"uppercase",letterSpacing:"0.06em",whiteSpace:"nowrap",
+                  boxShadow:"0 4px 14px rgba(13,148,136,0.4)"}}>Most Popular</div>}
+                <div style={{fontSize:13,fontWeight:700,color:p.color,marginBottom:14,
+                  textTransform:"uppercase",letterSpacing:"0.08em"}}>{p.name}</div>
+                {/* Price */}
+                <div style={{display:"flex",alignItems:"baseline",gap:4,marginBottom:billingCycle==="annual"?4:16}}>
+                  <span style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:44,fontWeight:800,color:"#fff"}}>
+                    ${billingCycle==="annual"?p.annual.toLocaleString():p.monthly.toLocaleString()}
+                  </span>
+                  <span style={{fontSize:13,color:C.textSub}}>/{billingCycle==="annual"?"yr":"mo"}</span>
+                </div>
+                {billingCycle==="annual"&&<div style={{marginBottom:4}}>
+                  <span style={{fontSize:12,color:C.textMuted,textDecoration:"line-through"}}>${(p.monthly*12).toLocaleString()}/yr</span>
+                  <span style={{fontSize:11,color:C.green,marginLeft:8}}>≈ ${monthlyEquiv?.toLocaleString()}/mo</span>
+                </div>}
+                <div style={{fontSize:11,color:C.textMuted,marginBottom:20}}>+ one-time $500 setup fee · after 14-day free trial</div>
+                <div style={{height:1,background:C.border,marginBottom:18}}/>
+                {/* Limits */}
+                <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+                  <span style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:6,
+                    background:`${p.color}14`,color:p.color,border:`1px solid ${p.color}28`}}>
+                    {p.seats} seat{p.seats>1?"s":""}
+                  </span>
+                  <span style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:6,
+                    background:`${p.color}14`,color:p.color,border:`1px solid ${p.color}28`}}>
+                    {p.zipLimit} ZIPs
+                  </span>
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:24}}>
+                  {p.features.map(f=>(
+                    <div key={f} style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                      <div style={{width:17,height:17,borderRadius:5,background:`${p.color}14`,
+                        border:`1px solid ${p.color}28`,display:"flex",alignItems:"center",justifyContent:"center",
+                        fontSize:9,color:p.color,flexShrink:0,marginTop:1}}>✓</div>
+                      <span style={{fontSize:13,color:C.textSub,lineHeight:1.4}}>{f}</span>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
+                  style={{width:"100%",fontSize:14,fontWeight:600,padding:"13px 0",borderRadius:10,cursor:"pointer",
+                  background:p.popular?"linear-gradient(135deg,#0d9488,#0284c7)":"transparent",
+                  color:p.popular?"#fff":p.color,
+                  border:p.popular?"none":`1px solid ${p.color}44`,
+                  boxShadow:p.popular?"0 4px 16px rgba(13,148,136,0.4)":"none"}}>
+                  Start Free Trial
+                </button>
               </div>
-              <div style={{fontSize:12,color:C.textMuted,marginBottom:24}}>after 14-day free trial</div>
-              <div style={{height:1,background:C.border,marginBottom:20}}/>
-              <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:28}}>
-                {p.features.map(f=>(
-                  <div key={f} style={{display:"flex",alignItems:"flex-start",gap:10}}>
-                    <div style={{width:18,height:18,borderRadius:5,background:`${p.color}14`,
-                      border:`1px solid ${p.color}28`,display:"flex",alignItems:"center",justifyContent:"center",
-                      fontSize:9,color:p.color,flexShrink:0,marginTop:1}}>✓</div>
-                    <span style={{fontSize:13,color:C.textSub,lineHeight:1.4}}>{f}</span>
-                  </div>
-                ))}
-              </div>
-              <button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
-                style={{width:"100%",fontSize:14,fontWeight:600,
-                padding:"13px 0",borderRadius:10,cursor:"pointer",
-                background:p.popular?"linear-gradient(135deg,#0d9488,#0284c7)":"transparent",
-                color:p.popular?"#fff":p.color,
-                border:p.popular?"none":`1px solid ${p.color}44`,
-                boxShadow:p.popular?"0 4px 16px rgba(13,148,136,0.4)":"none"}}>
-                Start Free Trial
-              </button>
+            );
+          })}
+        </div>
+
+        {/* Add-ons */}
+        <div style={{background:"rgba(255,255,255,0.02)",border:`1px solid ${C.border}`,
+          borderRadius:16,padding:28,backdropFilter:"blur(20px)"}}>
+          <div style={{textAlign:"center",marginBottom:24}}>
+            <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:20,fontWeight:700,color:"#fff",marginBottom:6}}>
+              Add-Ons
             </div>
-          ))}
+            <div style={{fontSize:13,color:C.textSub}}>Expand your capabilities beyond your base plan</div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:12}}>
+            {LANDING_ADDONS.map(a=>(
+              <div key={a.label} style={{background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,
+                borderRadius:12,padding:18,display:"flex",gap:14,alignItems:"flex-start"}}>
+                <div style={{width:40,height:40,borderRadius:10,background:`${C.orange}14`,
+                  border:`1px solid ${C.orange}28`,display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:16,color:C.orange,flexShrink:0}}>+</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"#fff",marginBottom:3}}>{a.label}</div>
+                  <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:4}}>
+                    <span style={{fontSize:16,fontWeight:700,color:C.orange}}>{a.price}</span>
+                    {a.strikethrough&&<span style={{fontSize:12,color:C.red,textDecoration:"line-through"}}>{a.strikethrough}</span>}
+                    {a.strikethrough&&<span style={{fontSize:10,fontWeight:700,background:C.green,color:"#000",padding:"1px 6px",borderRadius:8}}>20% off</span>}
+                  </div>
+                  <div style={{fontSize:12,color:C.textSub}}>{a.desc}</div>
+                  {a.note&&<div style={{fontSize:10,color:C.textMuted,marginTop:3}}>{a.note}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
       {/* ── TESTIMONIALS ── */}
       <section style={{position:"relative",zIndex:1,background:"rgba(255,255,255,0.015)",
+
         borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"80px 24px"}}>
         <div style={{maxWidth:1100,margin:"0 auto"}}>
           <div style={{textAlign:"center",marginBottom:48}}>
@@ -3039,6 +3181,529 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
 
 // ─── SUBSCRIPTIONS & BILLING ──────────────────────────────────────────────────
 // ─── PRICING EDITOR ──────────────────────────────────────────────────────────
+// ─── PERMISSION HELPERS ────────────────────────────────────────────────────
+function resolvePermissions(role, overrides={}){
+  const base = ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS["Sales Rep"];
+  return {...base, ...overrides};
+}
+
+function hasPermission(seat, feature){
+  if(!seat) return false;
+  if(seat.role==="Owner") return true;
+  const perms = resolvePermissions(seat.role, seat.permissionOverrides||{});
+  return !!perms[feature];
+}
+
+// ─── SEATS PANEL ──────────────────────────────────────────────────────────
+function SeatsPanel({roofer, seats, onUpdate, apiKeys}){
+  const[showInvite,setShowInvite]=useState(false);
+  const[inviteEmail,setInviteEmail]=useState("");
+  const[inviteRole,setInviteRole]=useState("Sales Rep");
+  const[inviting,setInviting]=useState(false);
+  const[editingSeat,setEditingSeat]=useState(null);
+
+  const includedSeats = PLAN_SEAT_LIMITS[roofer.plan]||1;
+  const maxExtra = 5;
+  const totalAllowed = includedSeats + maxExtra;
+  const activeSeats = seats.filter(s=>s.status!=="suspended");
+
+  async function sendInvite(){
+    if(!inviteEmail.trim()){ alert("Enter an email address."); return; }
+    if(activeSeats.length>=totalAllowed){ alert(`Seat limit reached (${totalAllowed} max for ${roofer.plan} + 5 extras). Remove a seat or upgrade.`); return; }
+    setInviting(true);
+    try{
+      const token = "inv_"+Date.now()+"_"+Math.random().toString(36).slice(2);
+      // Save invite token to Supabase
+      await supabaseUpsert("invite_tokens", getCurrentAccessToken(), {
+        token, account_id:roofer.id, email:inviteEmail.trim(), role:inviteRole,
+        expires_at: new Date(Date.now()+7*24*60*60*1000).toISOString(), used:false,
+      });
+      const newSeat = {
+        id:"seat_"+Date.now(), account_id:roofer.id,
+        email:inviteEmail.trim(), name:"", role:inviteRole, status:"invited",
+        permission_overrides:{},
+      };
+      await supabaseUpsert("seats", getCurrentAccessToken(), newSeat);
+      onUpdate("add_seat",{rooferId:roofer.id, seat:newSeat});
+      alert(`Invite sent to ${inviteEmail}. They'll receive a link to set up their account (valid 7 days).`);
+      setInviteEmail(""); setInviteRole("Sales Rep"); setShowInvite(false);
+    }catch(e){ alert("Failed to send invite: "+e.message); }
+    setInviting(false);
+  }
+
+  async function removeSeat(seat){
+    if(seat.role==="Owner"){ alert("Cannot remove the account Owner."); return; }
+    if(!window.confirm(`Remove ${seat.email} from this account?`)) return;
+    await supabaseDelete("seats", getCurrentAccessToken(), "id", seat.id);
+    onUpdate("remove_seat",{rooferId:roofer.id, seatId:seat.id});
+  }
+
+  async function toggleSuspend(seat){
+    const newStatus = seat.status==="suspended"?"active":"suspended";
+    await supabaseUpsert("seats", getCurrentAccessToken(), {id:seat.id, status:newStatus, account_id:roofer.id});
+    onUpdate("update_seat",{rooferId:roofer.id, seat:{...seat,status:newStatus}});
+  }
+
+  async function savePermissionOverrides(seat, overrides){
+    await supabaseUpsert("seats", getCurrentAccessToken(), {id:seat.id, account_id:roofer.id, permission_overrides:overrides});
+    onUpdate("update_seat",{rooferId:roofer.id, seat:{...seat,permissionOverrides:overrides}});
+    setEditingSeat(null);
+  }
+
+  const roleColor = r=>r==="Owner"?C.orange:r==="Office Manager"?C.blue:r==="Sales Rep"?C.green:C.purple;
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {/* Header */}
+      <div style={{...card(),display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={T.head(14,600)}>Team Seats</div>
+          <div style={{fontSize:12,color:C.textSub,marginTop:3}}>
+            {activeSeats.length} of {totalAllowed} seats used · {includedSeats} included in {roofer.plan} plan · up to {maxExtra} additional at $50/mo each
+          </div>
+        </div>
+        <Btn variant="primary" onClick={()=>setShowInvite(true)}>+ Invite Member</Btn>
+      </div>
+
+      {/* Invite modal */}
+      {showInvite&&<Modal title="Invite Team Member" onClose={()=>setShowInvite(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <Input label="Email Address" value={inviteEmail} onChange={setInviteEmail} placeholder="team@yourcompany.com"/>
+          <Select label="Role" value={inviteRole} onChange={setInviteRole} options={SEAT_ROLES.filter(r=>r!=="Owner")}/>
+          <div style={{background:C.surface,borderRadius:8,padding:12,border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:11,fontWeight:600,color:C.textSub,marginBottom:8}}>DEFAULT PERMISSIONS FOR {inviteRole.toUpperCase()}</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+              {Object.entries(PERMISSION_LABELS).map(([k,label])=>{
+                const has = ROLE_PERMISSIONS[inviteRole]?.[k];
+                return(
+                  <div key={k} style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:has?C.text:C.textMuted}}>
+                    <span style={{color:has?C.green:C.border,fontSize:10}}>{has?"✓":"✗"}</span>{label}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
+            <Btn onClick={()=>setShowInvite(false)}>Cancel</Btn>
+            <Btn variant="primary" onClick={sendInvite} disabled={inviting}>{inviting?"Sending...":"Send Invite"}</Btn>
+          </div>
+        </div>
+      </Modal>}
+
+      {/* Permission edit modal */}
+      {editingSeat&&<PermissionEditModal
+        seat={editingSeat}
+        onSave={overrides=>savePermissionOverrides(editingSeat,overrides)}
+        onClose={()=>setEditingSeat(null)}
+      />}
+
+      {/* Seat list */}
+      <div style={card({padding:0,overflow:"hidden"})}>
+        <table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr style={{background:C.surface}}>
+            {["Member","Role","Status","Permissions","Actions"].map(h=>(
+              <th key={h} style={{padding:"10px 16px",textAlign:"left",fontSize:10,fontWeight:600,
+                color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",
+                borderBottom:`1px solid ${C.border}`}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {seats.length===0&&<tr><td colSpan={5} style={{padding:24,textAlign:"center",color:C.textMuted,fontSize:13}}>No team members yet. Invite someone to get started.</td></tr>}
+            {seats.map((seat,i)=>(
+              <tr key={seat.id} style={{borderBottom:i<seats.length-1?`1px solid ${C.border}`:"none"}}>
+                <td style={{padding:"12px 16px"}}>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>{seat.name||seat.email}</div>
+                  {seat.name&&<div style={{fontSize:11,color:C.textSub,marginTop:1}}>{seat.email}</div>}
+                </td>
+                <td style={{padding:"12px 16px"}}>
+                  <Badge label={seat.role} color={roleColor(seat.role)} small/>
+                </td>
+                <td style={{padding:"12px 16px"}}>
+                  <Badge label={seat.status}
+                    color={seat.status==="active"?C.green:seat.status==="invited"?C.yellow:C.red} small/>
+                </td>
+                <td style={{padding:"12px 16px"}}>
+                  {seat.role!=="Owner"&&<Btn small onClick={()=>setEditingSeat(seat)}>Edit Perms</Btn>}
+                  {seat.role==="Owner"&&<span style={{fontSize:11,color:C.textMuted}}>Full access</span>}
+                </td>
+                <td style={{padding:"12px 16px"}}>
+                  <div style={flex(6)}>
+                    {seat.role!=="Owner"&&<>
+                      <Btn small variant={seat.status==="suspended"?"success":"warning"}
+                        onClick={()=>toggleSuspend(seat)}>
+                        {seat.status==="suspended"?"Restore":"Suspend"}
+                      </Btn>
+                      <Btn small variant="danger" onClick={()=>removeSeat(seat)}>Remove</Btn>
+                    </>}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Role legend */}
+      <div style={card()}>
+        <div style={{fontSize:12,fontWeight:600,color:C.textSub,marginBottom:12}}>ROLE PERMISSION MATRIX</div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+            <thead><tr style={{background:C.surface}}>
+              <th style={{padding:"8px 12px",textAlign:"left",color:C.textSub,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>Permission</th>
+              {SEAT_ROLES.map(r=>(
+                <th key={r} style={{padding:"8px 12px",textAlign:"center",color:roleColor(r),
+                  borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{r}</th>
+              ))}
+            </tr></thead>
+            <tbody>{Object.entries(PERMISSION_LABELS).map(([k,label],i,arr)=>(
+              <tr key={k} style={{borderBottom:i<arr.length-1?`1px solid ${C.border}`:"none"}}>
+                <td style={{padding:"7px 12px",color:C.text}}>{label}</td>
+                {SEAT_ROLES.map(r=>(
+                  <td key={r} style={{padding:"7px 12px",textAlign:"center"}}>
+                    <span style={{color:ROLE_PERMISSIONS[r]?.[k]?C.green:C.border,fontSize:13}}>
+                      {ROLE_PERMISSIONS[r]?.[k]?"✓":"✗"}
+                    </span>
+                  </td>
+                ))}
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PermissionEditModal({seat, onSave, onClose}){
+  const base = ROLE_PERMISSIONS[seat.role]||{};
+  const[overrides,setOverrides]=useState(seat.permissionOverrides||{});
+
+  function effective(k){ return overrides.hasOwnProperty(k)?overrides[k]:base[k]; }
+  function toggle(k){ setOverrides(p=>({...p,[k]:!effective(k)})); }
+  function reset(k){ setOverrides(p=>{const n={...p};delete n[k];return n;}); }
+
+  return(
+    <Modal title={`Edit Permissions — ${seat.name||seat.email}`} onClose={onClose}>
+      <div style={{fontSize:12,color:C.textSub,marginBottom:14}}>
+        Base role: <strong style={{color:C.text}}>{seat.role}</strong>. Toggling overrides the default. Click the reset icon to restore the default.
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+        {Object.entries(PERMISSION_LABELS).map(([k,label])=>{
+          const isOverridden = overrides.hasOwnProperty(k);
+          const val = effective(k);
+          return(
+            <div key={k} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+              background:isOverridden?`${C.orange}08`:C.surface,
+              border:`1px solid ${isOverridden?C.orange+"33":C.border}`,borderRadius:7}}>
+              <button onClick={()=>toggle(k)} style={{
+                width:36,height:20,borderRadius:10,border:"none",cursor:"pointer",
+                background:val?C.green:C.border,position:"relative",flexShrink:0,
+              }}>
+                <div style={{width:16,height:16,borderRadius:"50%",background:"#fff",
+                  position:"absolute",top:2,left:val?18:2,transition:"left 0.15s"}}/>
+              </button>
+              <div style={{flex:1,fontSize:12,color:val?C.text:C.textMuted}}>{label}</div>
+              {isOverridden&&<button onClick={()=>reset(k)} style={{fontSize:10,color:C.textMuted,
+                background:"none",border:"none",cursor:"pointer"}} title="Reset to role default">↺ reset</button>}
+              {isOverridden&&<Badge label="override" color={C.orange} small/>}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{...flex(8,"center","flex-end")}}>
+        <Btn onClick={onClose}>Cancel</Btn>
+        <Btn variant="primary" onClick={()=>onSave(overrides)}>Save Permissions</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── ZIP TERRITORY PANEL ──────────────────────────────────────────────────
+function ZipTerritoryPanel({roofer, zipTerritories, allZipData, onUpdate}){
+  const[search,setSearch]=useState("");
+  const[view,setView]=useState("list"); // list | map
+  const[adding,setAdding]=useState(null); // zip being added/purchased
+  const[confirmZip,setConfirmZip]=useState(null);
+
+  const myZips = zipTerritories.filter(z=>z.account_id===roofer.id);
+  const zipLimit = roofer.zipLimit||PLAN_ZIP_LIMITS[roofer.plan]||10;
+  const usedZips = myZips.length;
+
+  // Compute availability for each zip
+  function zipStatus(zip){
+    const entries = allZipData.filter(z=>z.zip_code===zip);
+    const exclusive = entries.find(z=>z.is_exclusive);
+    if(exclusive) return exclusive.account_id===roofer.id?"mine-exclusive":"locked";
+    const count = entries.length;
+    const mine = entries.find(z=>z.account_id===roofer.id);
+    if(mine) return "mine";
+    if(count>=3) return "full";
+    if(count===2) return "limited";
+    return "open";
+  }
+
+  const statusColor = s=>{
+    if(s==="mine"||s==="mine-exclusive") return C.green;
+    if(s==="open") return C.teal||"#2dd4bf";
+    if(s==="limited") return C.yellow;
+    if(s==="full") return C.red;
+    if(s==="locked") return C.textMuted;
+    return C.border;
+  };
+  const statusLabel = s=>{
+    if(s==="mine") return "Yours";
+    if(s==="mine-exclusive") return "Yours (Exclusive)";
+    if(s==="open") return "Open";
+    if(s==="limited") return "Limited";
+    if(s==="full") return "Full";
+    if(s==="locked") return "Locked";
+    return s;
+  };
+
+  // Get unique ZIPs in the system
+  const allKnownZips = [...new Set([
+    ...allZipData.map(z=>z.zip_code),
+    ...myZips.map(z=>z.zip_code),
+  ])].sort();
+
+  const filteredZips = allKnownZips.filter(z=>z.includes(search.trim()));
+
+  async function claimZip(zip, isExclusive=false){
+    const status = zipStatus(zip);
+    if(status==="locked"){ alert("This ZIP is exclusively locked by another account."); return; }
+    if(status==="full"&&!isExclusive){ alert("This ZIP is full (3/3 slots taken)."); return; }
+    if(status==="mine"||status==="mine-exclusive"){ alert("You already own this ZIP."); return; }
+
+    if(usedZips>=zipLimit&&!isExclusive){
+      alert(`You've used all ${zipLimit} ZIP slots on your ${roofer.plan} plan. Purchase a zip bundle or upgrade your plan.`);
+      return;
+    }
+
+    const cost = isExclusive ? 1000 : 0;
+    const msg = isExclusive
+      ? `Add exclusive Metro Zone Lock on ZIP ${zip} for $1,000/mo? This removes all other roofers from this ZIP.`
+      : `Add ZIP ${zip} to your territory?`;
+
+    if(!window.confirm(msg)) return;
+
+    try{
+      const newZip = {
+        id:"zip_"+Date.now(),
+        zip_code:zip,
+        account_id:roofer.id,
+        is_exclusive:isExclusive,
+        monthly_cost:cost,
+      };
+      await supabaseUpsert("zip_territories", getCurrentAccessToken(), newZip);
+      // Init round-robin entry
+      await supabaseUpsert("lead_round_robin", getCurrentAccessToken(), {
+        zip_code:zip, account_id:roofer.id,
+        last_served_at:new Date(0).toISOString(),
+      });
+      onUpdate("add_zip_territory",{rooferId:roofer.id, zipEntry:newZip});
+      alert(`ZIP ${zip} added to your territory!`);
+    }catch(e){
+      alert("Failed to claim ZIP: "+e.message);
+    }
+  }
+
+  async function removeZip(zip){
+    if(!window.confirm(`Remove ZIP ${zip} from your territory?`)) return;
+    try{
+      await supabaseDelete("zip_territories", getCurrentAccessToken(), "zip_code", zip);
+      onUpdate("remove_zip_territory",{rooferId:roofer.id, zip});
+    }catch(e){
+      alert("Failed to remove ZIP: "+e.message);
+    }
+  }
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {/* Header */}
+      <div style={card({display:"flex",alignItems:"center",justifyContent:"space-between"})}>
+        <div>
+          <div style={T.head(14,600)}>ZIP Territory Management</div>
+          <div style={{fontSize:12,color:C.textSub,marginTop:3}}>
+            {usedZips} / {zipLimit} ZIPs used · {roofer.plan} plan includes {PLAN_ZIP_LIMITS[roofer.plan]} ZIPs
+          </div>
+        </div>
+        <div style={flex(8)}>
+          <div style={{...flex(4),background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:8,overflow:"hidden"}}>
+            {["list","map"].map(v=>(
+              <button key={v} onClick={()=>setView(v)} style={{
+                padding:"6px 16px",fontSize:12,fontWeight:600,
+                background:view===v?C.orange:"transparent",
+                color:view===v?"#000":C.textSub,
+                border:"none",cursor:"pointer",textTransform:"capitalize",
+              }}>{v}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ZIP usage bar */}
+      <div style={card()}>
+        <div style={{...flex(0,"center","space-between"),marginBottom:8}}>
+          <span style={{fontSize:12,fontWeight:600,color:C.text}}>ZIP Allowance</span>
+          <span style={{fontSize:12,color:C.textSub}}>{usedZips}/{zipLimit}</span>
+        </div>
+        <div style={{height:6,background:C.border,borderRadius:3,overflow:"hidden"}}>
+          <div style={{height:"100%",width:`${Math.min(100,(usedZips/zipLimit)*100)}%`,
+            background:usedZips>=zipLimit?C.red:`linear-gradient(90deg,${C.orange},${C.blue})`,
+            borderRadius:3,transition:"width 0.3s"}}/>
+        </div>
+        {usedZips>=zipLimit&&<div style={{fontSize:11,color:C.red,marginTop:6}}>
+          ZIP limit reached. Purchase a bundle below or upgrade your plan.
+        </div>}
+      </div>
+
+      {/* Search + list/map */}
+      <div style={card()}>
+        <div style={{marginBottom:12}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search ZIP codes..."
+            style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,padding:"8px 12px",color:C.text,fontSize:13,outline:"none"}}/>
+        </div>
+
+        {view==="list"&&<div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:320,overflowY:"auto"}}>
+          {/* My ZIPs first */}
+          {myZips.filter(z=>z.zip_code.includes(search)).map(z=>(
+            <div key={z.zip_code} style={{display:"flex",alignItems:"center",gap:10,
+              padding:"9px 12px",background:C.surface,borderRadius:8,
+              border:`1px solid ${C.green}33`}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:C.green,flexShrink:0}}/>
+              <div style={{flex:1}}>
+                <span style={{fontSize:13,fontWeight:600,color:C.text}}>{z.zip_code}</span>
+                {z.is_exclusive&&<Badge label="Exclusive" color={C.orange} small/>}
+              </div>
+              <Badge label="Yours" color={C.green} small/>
+              <Btn small variant="danger" onClick={()=>removeZip(z.zip_code)}>Remove</Btn>
+            </div>
+          ))}
+          {/* Other available ZIPs */}
+          {filteredZips.filter(z=>!myZips.some(m=>m.zip_code===z)).map(zip=>{
+            const st = zipStatus(zip);
+            const entries = allZipData.filter(z2=>z2.zip_code===zip);
+            return(
+              <div key={zip} style={{display:"flex",alignItems:"center",gap:10,
+                padding:"9px 12px",background:C.surface,borderRadius:8,
+                border:`1px solid ${C.border}`,opacity:st==="locked"||st==="full"?0.5:1}}>
+                <div style={{width:8,height:8,borderRadius:"50%",background:statusColor(st),flexShrink:0}}/>
+                <div style={{flex:1}}>
+                  <span style={{fontSize:13,fontWeight:500,color:C.text}}>{zip}</span>
+                  <span style={{fontSize:10,color:C.textSub,marginLeft:8}}>
+                    {st!=="locked"&&st!=="mine"&&`${entries.length}/3 slots taken`}
+                  </span>
+                </div>
+                <Badge label={statusLabel(st)} color={statusColor(st)} small/>
+                {st==="open"||st==="limited"?<>
+                  <Btn small variant="success" onClick={()=>claimZip(zip)}>Claim</Btn>
+                  <Btn small variant="warning" onClick={()=>claimZip(zip,true)}>Lock $1k/mo</Btn>
+                </>:
+                st==="locked"?<span style={{fontSize:10,color:C.textMuted}}>🔒 Locked</span>:null}
+              </div>
+            );
+          })}
+          {filteredZips.length===0&&myZips.filter(z=>z.zip_code.includes(search)).length===0&&
+            <div style={{textAlign:"center",color:C.textMuted,fontSize:13,padding:16}}>
+              No ZIPs found. Enter a ZIP code above to search or claim a new one.
+            </div>
+          }
+          {/* Add any ZIP manually */}
+          {search.length>=5&&!allKnownZips.includes(search)&&(
+            <div style={{display:"flex",alignItems:"center",gap:10,
+              padding:"9px 12px",background:`${C.orange}08`,borderRadius:8,
+              border:`1px solid ${C.orange}33`}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:C.orange,flexShrink:0}}/>
+              <div style={{flex:1,fontSize:13,color:C.text}}>New ZIP: {search}</div>
+              <Badge label="Open" color={C.green} small/>
+              <Btn small variant="success" onClick={()=>claimZip(search)}>Claim</Btn>
+              <Btn small variant="warning" onClick={()=>claimZip(search,true)}>Lock $1k/mo</Btn>
+            </div>
+          )}
+        </div>}
+
+        {view==="map"&&<ZipMapView myZips={myZips} allZipData={allZipData} onClaim={claimZip}/>}
+      </div>
+
+      {/* Add-ons */}
+      <div style={card()}>
+        <div style={{...T.head(13,600),marginBottom:12}}>ZIP Expansion Add-ons</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          {ZIP_ADDONS.filter(a=>a.id!=="seat").map(addon=>(
+            <div key={addon.id} style={{background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:10,padding:14,position:"relative"}}>
+              {addon.savings&&<div style={{position:"absolute",top:-8,right:12,
+                background:C.green,color:"#000",fontSize:9,fontWeight:700,
+                padding:"2px 8px",borderRadius:10}}>{addon.savings}</div>}
+              <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:4}}>{addon.label}</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:4,marginBottom:4}}>
+                <span style={{fontSize:20,fontWeight:700,color:C.orange}}>${addon.price}</span>
+                <span style={{fontSize:11,color:C.textSub}}>/mo</span>
+                {addon.original&&<span style={{fontSize:11,color:C.red,textDecoration:"line-through",marginLeft:4}}>${addon.original}/mo</span>}
+              </div>
+              <div style={{fontSize:11,color:C.textSub,marginBottom:10}}>{addon.desc}</div>
+              <Btn small variant="primary" onClick={()=>alert("Routes to Stripe checkout — wire up your Stripe price ID for "+addon.id)}>
+                Add {addon.label}
+              </Btn>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Simple grid-based map view for ZIPs
+function ZipMapView({myZips, allZipData, onClaim}){
+  const statusColor=s=>s==="mine"||s==="mine-exclusive"?C.green:s==="open"?"#2dd4bf":s==="limited"?C.yellow:s==="full"?C.red:C.textMuted;
+
+  const allZips=[...new Set([...myZips.map(z=>z.zip_code),...allZipData.map(z=>z.zip_code)])].sort();
+
+  return(
+    <div>
+      <div style={{fontSize:11,color:C.textSub,marginBottom:10}}>
+        Interactive map placeholder — integrate with Google Maps or Mapbox by adding your API key. Below shows your current ZIPs as a visual grid.
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+        {allZips.map(zip=>{
+          const myEntry=myZips.find(z=>z.zip_code===zip);
+          const count=allZipData.filter(z=>z.zip_code===zip).length;
+          const exclusive=allZipData.find(z=>z.zip_code===zip&&z.is_exclusive);
+          const st=myEntry?(myEntry.is_exclusive?"mine-exclusive":"mine"):exclusive?"locked":count>=3?"full":count===2?"limited":"open";
+          return(
+            <div key={zip} onClick={()=>(!myEntry&&st!=="locked"&&st!=="full")&&onClaim(zip)}
+              title={`ZIP ${zip} — ${st} · ${count}/3 slots`}
+              style={{
+                width:56,height:44,borderRadius:7,display:"flex",flexDirection:"column",
+                alignItems:"center",justifyContent:"center",cursor:!myEntry&&st!=="locked"&&st!=="full"?"pointer":"default",
+                background:`${statusColor(st)}18`,border:`1px solid ${statusColor(st)}44`,
+                transition:"transform 0.1s",
+              }}
+              onMouseEnter={e=>{if(!myEntry)e.currentTarget.style.transform="scale(1.05)";}}
+              onMouseLeave={e=>e.currentTarget.style.transform="scale(1)"}>
+              <div style={{fontSize:10,fontWeight:700,color:statusColor(st)}}>{zip}</div>
+              {st==="locked"&&<div style={{fontSize:8,color:C.textMuted}}>🔒</div>}
+              {(st==="mine"||st==="mine-exclusive")&&<div style={{fontSize:8,color:C.green}}>✓</div>}
+              {st!=="mine"&&st!=="mine-exclusive"&&st!=="locked"&&<div style={{fontSize:8,color:statusColor(st)}}>{count}/3</div>}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{display:"flex",gap:14,marginTop:12,flexWrap:"wrap"}}>
+        {[{c:"#2dd4bf",l:"Open"},{c:C.yellow,l:"Limited (2/3)"},{c:C.red,l:"Full"},{c:C.green,l:"Yours"},{c:C.textMuted,l:"Locked"}].map(item=>(
+          <div key={item.l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.textSub}}>
+            <div style={{width:8,height:8,borderRadius:2,background:item.c}}/>
+            {item.l}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PricingEditor({pricing,setPricing,roofers}){
   const[editingPlan,setEditingPlan]=useState(null); // plan name being edited
   const[showAdd,setShowAdd]=useState(false);
@@ -3203,16 +3868,16 @@ function EditPlanModal({plan,data,color,onSave,onClose}){
   );
 }
 
-function Subscriptions({roofers,onUpdate}){
+function Subscriptions({roofers,seats,zipTerritories,onUpdate}){
   const[tab,setTab]=useState("Clients");
   const[showInvite,setShowInvite]=useState(false);
   const[iName,setIName]=useState(""),[iEmail,setIEmail]=useState("");
   const[pricing,setPricing]=useState({
-    Starter:{price:297,features:["Up to 50 leads/mo","1 territory","Email support","Basic analytics"]},
-    Pro:{price:497,features:["Up to 200 leads/mo","3 territories","SMS automation","Priority support","Full analytics"]},
-    Elite:{price:997,features:["Unlimited leads","10 territories","Full AI automation","Dedicated manager","White-label"]},
+    Starter:{price:1500,features:["1 user","1 city","10 ZIP codes","Standard storm alerts","Lead dashboard","Inspection scheduling"]},
+    Pro:{price:2000,features:["1 user","1 city","20 ZIP codes","Priority storm alerts","Lead dashboard","Inspection scheduling"]},
+    Growth:{price:2750,features:["3 users","2 cities","30 ZIP codes","Priority storm alerts","Lead dashboard","Inspection scheduling","Advanced reporting"]},
   });
-  const mrr=roofers.filter(r=>r.status==="active").reduce((s,r)=>s+(pricing[r.plan]?.price||PLAN_PRICES[r.plan]),0);
+  const mrr=roofers.filter(r=>r.status==="active").reduce((s,r)=>s+(pricing[r.plan]?.price||PLAN_PRICES[r.plan]||0),0);
 
   return <div>
     {showInvite&&<Modal title="Invite Client" onClose={()=>setShowInvite(false)}>
@@ -3221,11 +3886,11 @@ function Subscriptions({roofers,onUpdate}){
         <Input label="Email" value={iEmail} onChange={setIEmail} type="email" placeholder="owner@company.com"/>
         <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
           <Btn onClick={()=>setShowInvite(false)}>Cancel</Btn>
-          <Btn variant="primary" onClick={()=>{if(!iName||!iEmail)return;onUpdate("add_roofer",{roofer:{id:"r"+Date.now(),name:iName,owner:iName,email:iEmail,phone:"",plan:"Starter",status:"trial",territories:[],revenue:0,leads:0,booked:0,inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},scheduleSettings:{...DEFAULT_SCHEDULE},notifications:[],pin:"0000"}});setShowInvite(false);setIEmail("");setIName("");alert(`Invite sent to ${iEmail}`);}}>Send Invite</Btn>
+          <Btn variant="primary" onClick={()=>{if(!iName||!iEmail)return;onUpdate("add_roofer",{roofer:{id:"r"+Date.now(),name:iName,owner:iName,email:iEmail,phone:"",plan:"Starter",status:"trial",territories:[],revenue:0,leads:0,booked:0,inspectors:[],inspections:[],revenueLog:[],commSettings:{...DEFAULT_COMM},scheduleSettings:{...DEFAULT_SCHEDULE},notifications:[],pin:"0000",zipLimit:10,seatLimit:1}});setShowInvite(false);setIEmail("");setIName("");alert(`Invite sent to ${iEmail}`);}}>Send Invite</Btn>
         </div>
       </div>
     </Modal>}
-    <Tabs tabs={["Clients","Pricing","Billing"]} active={tab} onChange={setTab}/>
+    <Tabs tabs={["Clients","Seats","Territories","Pricing","Billing"]} active={tab} onChange={setTab}/>
 
     {tab==="Clients"&&<div>
       <div style={{...flex(0,"center","flex-end"),marginBottom:14}}><Btn variant="primary" onClick={()=>setShowInvite(true)}>+ Invite Client</Btn></div>
@@ -3275,6 +3940,42 @@ function Subscriptions({roofers,onUpdate}){
     </div>}
 
     {tab==="Pricing"&&<PricingEditor pricing={pricing} setPricing={setPricing} roofers={roofers} onUpdate={onUpdate}/>}
+    {tab==="Seats"&&<div style={{marginTop:14}}>
+      {roofers.length===0
+        ? <div style={{...card(),textAlign:"center",color:C.textMuted,padding:32}}>No clients yet. Invite a client first to manage their seats.</div>
+        : roofers.map(r=>(
+          <div key={r.id} style={{marginBottom:16}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8,paddingLeft:2}}>
+              {r.name} — {r.plan} plan
+            </div>
+            <SeatsPanel
+              roofer={r}
+              seats={seats.filter(s=>s.account_id===r.id)}
+              onUpdate={onUpdate}
+              apiKeys={{}}
+            />
+          </div>
+        ))
+      }
+    </div>}
+    {tab==="Territories"&&<div style={{marginTop:14}}>
+      {roofers.length===0
+        ? <div style={{...card(),textAlign:"center",color:C.textMuted,padding:32}}>No clients yet. Invite a client first to manage their territories.</div>
+        : roofers.map(r=>(
+          <div key={r.id} style={{marginBottom:20}}>
+            <div style={{fontSize:13,fontWeight:600,color:C.textSub,marginBottom:8,paddingLeft:2}}>
+              {r.name} — {r.plan} plan
+            </div>
+            <ZipTerritoryPanel
+              roofer={r}
+              zipTerritories={zipTerritories.filter(z=>z.account_id===r.id)}
+              allZipData={zipTerritories}
+              onUpdate={onUpdate}
+            />
+          </div>
+        ))
+      }
+    </div>}
 
     {tab==="Billing"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:12}}>
@@ -3357,6 +4058,8 @@ function APISettings({apiKeys,onUpdate}){
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App(){
   const[roofers,setRoofers]=useState([]);
+  const[seats,setSeats]=useState([]);
+  const[zipTerritories,setZipTerritories]=useState([]);
   const[leads,setLeads]=useState([]);
   const[storms,setStorms]=useState([]);
   const[apiKeys,setApiKeys]=useState({});
@@ -3417,6 +4120,8 @@ export default function App(){
         setActivities(data.activities.length>0?data.activities:[{type:"system",message:"SkyShield Pro initialized and ready.",ts:new Date().toLocaleString(),badge:"ready",badgeColor:C.green}]);
         setScanSettings(data.scanSettings);
         setApiKeys(data.apiKeys);
+        setSeats(data.seats||[]);
+        setZipTerritories(data.zipTerritories||[]);
         // Show "What's New" if the user hasn't seen this version yet
         if((data.lastSeenVersion||"0.0.0")!==APP_VERSION) setShowWhatsNew(true);
         setDataLoaded(true);
@@ -3582,6 +4287,11 @@ export default function App(){
       case "add_conversation":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,conversations:[...(l.conversations||[]),payload.entry]}:l));break;
       case "update_lead_notes":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,notes:payload.notes}:l));break;
       case "clear_activities":setActivities([]);break;
+      case "add_seat":setSeats(p=>[...p,payload.seat]);break;
+      case "remove_seat":setSeats(p=>p.filter(s=>s.id!==payload.seatId));break;
+      case "update_seat":setSeats(p=>p.map(s=>s.id===payload.seat.id?{...s,...payload.seat}:s));break;
+      case "add_zip_territory":setZipTerritories(p=>[...p,payload.zipEntry]);break;
+      case "remove_zip_territory":setZipTerritories(p=>p.filter(z=>!(z.zip_code===payload.zip&&z.account_id===payload.rooferId)));break;
       case "update_adult_confirmed":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,adultConfirmed:payload.status}:l));break;
       case "set_contacted_at":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,contactedAt:payload.ts}:l));break;
       case "mark_followup_sent":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,followupSent:true}:l));break;
@@ -3769,7 +4479,7 @@ export default function App(){
         :activeSection==="Command Center"
           ?<CommandCenter roofers={roofers} leads={leads} storms={storms} apiKeys={apiKeys} onUpdate={handleUpdate} onSelectRoofer={selectRoofer} scanSettings={scanSettings} onScanSettingsChange={setScanSettings} activities={activities} addActivity={addActivity}/>
           :activeSection==="Subscriptions & Billing"
-            ?<Subscriptions roofers={roofers} onUpdate={handleUpdate}/>
+            ?<Subscriptions roofers={roofers} seats={seats} zipTerritories={zipTerritories} onUpdate={handleUpdate}/>
             :<APISettings apiKeys={apiKeys} onUpdate={handleUpdate}/>
       }
     </main>
