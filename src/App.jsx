@@ -2808,7 +2808,7 @@ function QuickAssignRow({roofer,onSave}){
 }
 
 // ─── COMMAND CENTER ───────────────────────────────────────────────────────────
-function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,scanSettings,onScanSettingsChange,activities,addActivity}){
+function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,scanSettings,onScanSettingsChange,activities,addActivity,zipTerritories}){
   const[tab,setTab]=useState("Overview");
   const[showAddRoofer,setShowAddRoofer]=useState(false);
   const[editingRoofer,setEditingRoofer]=useState(null);
@@ -2828,7 +2828,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
     if(!auto) setScanStatus("Scanning...");
     if(apiKeys.weather){
       try{
-        const zips=[...new Set(roofers.flatMap(r=>r.territories))];
+        const zips=[...new Set([...roofers.flatMap(r=>r.territories),...(zipTerritories||[]).map(zt=>zt.zip_code)])];
         let found=0;
         for(const zip of zips.slice(0,5)){
           const data=await fetchWeatherAlerts(apiKeys.weather,zip);
@@ -3043,7 +3043,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           <Btn variant="info" onClick={()=>{
             if(!manualZip.trim())return;
             const zip=manualZip.trim();
-            const eligible=roofers.filter(r=>r.status==="active"&&r.territories.includes(zip));
+            const eligible=roofers.filter(r=>r.status==="active"&&(r.territories.includes(zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===zip)));
             if(eligible.length===0){ alert("No active roofer covers ZIP "+zip); setManualZip(""); return; }
             // Assign to whichever eligible roofer currently has the fewest pending leads in this ZIP (fairness)
             const r=eligible.reduce((least,cur)=>{
@@ -3067,7 +3067,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           <TD dim>{st.date}</TD>
           <TD><Badge label={st.processed?"processed":"new"} color={st.processed?C.green:C.orange} small/></TD>
           <TD>{!st.processed&&<Btn small variant="primary" onClick={()=>{
-            const eligible=roofers.filter(r=>r.status==="active"&&r.territories.includes(st.zip));
+            const eligible=roofers.filter(r=>r.status==="active"&&(r.territories.includes(st.zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===st.zip)));
             if(eligible.length===0){ alert("No active roofers cover ZIP "+st.zip+"."); return; }
             const leadCount=Math.max(1,Math.min(eligible.length*3,12)); // demo volume, scales with coverage
             const assignments=distributeLeadsRoundRobin(eligible,leadCount);
@@ -4477,7 +4477,7 @@ export default function App(){
       {selectedRoofer
         ?<RooferDashboard roofer={roofers.find(r=>r.id===selectedRoofer.id)||selectedRoofer} leads={leads} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
         :activeSection==="Command Center"
-          ?<CommandCenter roofers={roofers} leads={leads} storms={storms} apiKeys={apiKeys} onUpdate={handleUpdate} onSelectRoofer={selectRoofer} scanSettings={scanSettings} onScanSettingsChange={setScanSettings} activities={activities} addActivity={addActivity}/>
+          ?<CommandCenter roofers={roofers} leads={leads} storms={storms} apiKeys={apiKeys} onUpdate={handleUpdate} onSelectRoofer={selectRoofer} scanSettings={scanSettings} onScanSettingsChange={setScanSettings} activities={activities} addActivity={addActivity} zipTerritories={zipTerritories}/>
           :activeSection==="Subscriptions & Billing"
             ?<Subscriptions roofers={roofers} seats={seats} zipTerritories={zipTerritories} onUpdate={handleUpdate}/>
             :<APISettings apiKeys={apiKeys} onUpdate={handleUpdate}/>
