@@ -160,7 +160,7 @@ async function billingCall(endpoint, body){
 
 function leadToRow(l){
   return {
-    id:l.id, homeowner:l.homeowner, phone:l.phone, zip:l.zip, roofer_id:l.rooferId,
+    id:l.id, homeowner:l.homeowner, phone:l.phone, address:l.address||"", zip:l.zip, roofer_id:l.rooferId,
     storm_type:l.stormType, status:l.status, notes:l.notes||"",
     contacted_at:l.contactedAt, followup_sent:!!l.followupSent,
     adult_confirmed:l.adultConfirmed||"unconfirmed", conversations:l.conversations||[],
@@ -169,7 +169,7 @@ function leadToRow(l){
 }
 function rowToLead(row){
   return {
-    id:row.id, homeowner:row.homeowner, phone:row.phone, zip:row.zip, rooferId:row.roofer_id,
+    id:row.id, homeowner:row.homeowner, phone:row.phone, address:row.address||"", zip:row.zip, rooferId:row.roofer_id,
     stormType:row.storm_type, status:row.status, notes:row.notes||"",
     contactedAt:row.contacted_at, followupSent:!!row.followup_sent,
     adultConfirmed:row.adult_confirmed||"unconfirmed", conversations:row.conversations||[],
@@ -1101,7 +1101,7 @@ function ConversationModal({lead,roofer,onClose,onSendMessage,onUpdateNotes}){
   return <Modal title={`${lead.homeowner} — ${lead.phone}`} onClose={onClose} wide>
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{...flex(12,"center","space-between"),padding:"8px 12px",background:C.surface,borderRadius:7,flexWrap:"wrap",gap:6}}>
-        <div style={flex(12)}><span style={{fontSize:12,color:C.textSub}}>📍 {lead.zip}</span><span style={{fontSize:12,color:C.textSub}}>⛈ {lead.stormType}</span></div>
+        <div style={flex(12)}><span style={{fontSize:12,color:C.textSub}}>{lead.address?`${lead.address}, `:""}ZIP {lead.zip}</span><span style={{fontSize:12,color:C.textSub}}>⛈ {lead.stormType}</span></div>
         <div style={flex(6)}><StatusBadge status={lead.status}/><AdultBadge status={lead.adultConfirmed}/></div>
       </div>
       <div style={{...card({padding:12})}}>
@@ -1319,11 +1319,12 @@ function EditRooferModal({roofer,onClose,onSave}){
 }
 
 function EditLeadModal({lead,roofers,onClose,onSave}){
-  const[f,setF]=useState({homeowner:lead.homeowner,phone:lead.phone,zip:lead.zip,stormType:lead.stormType,status:lead.status,rooferId:lead.rooferId,notes:lead.notes||""});
+  const[f,setF]=useState({homeowner:lead.homeowner,phone:lead.phone,address:lead.address||"",zip:lead.zip,stormType:lead.stormType,status:lead.status,rooferId:lead.rooferId,notes:lead.notes||""});
   const u=k=>v=>setF(p=>({...p,[k]:v}));
   return <Modal title="Edit Lead" onClose={onClose}>
     <div style={{display:"flex",flexDirection:"column",gap:13}}>
       <Input label="Homeowner Name" value={f.homeowner} onChange={u("homeowner")}/>
+      <Input label="Street Address" value={f.address} onChange={u("address")} placeholder="1204 Oak Ln"/>
       <div style={grid("1fr 1fr",12)}>
         <Input label="Phone" value={f.phone} onChange={u("phone")}/>
         <Input label="ZIP" value={f.zip} onChange={u("zip")}/>
@@ -1344,7 +1345,7 @@ function EditLeadModal({lead,roofers,onClose,onSave}){
 
 function AddLeadModal({roofers, defaultRooferId, onClose, onAdd}){
   const[f,setF]=useState({
-    homeowner:"", phone:"", zip:"",
+    homeowner:"", phone:"", address:"", zip:"",
     stormType:"Hail", status:"pending",
     rooferId:defaultRooferId||roofers[0]?.id||"",
     notes:"",
@@ -1357,7 +1358,8 @@ function AddLeadModal({roofers, defaultRooferId, onClose, onAdd}){
     onAdd({
       id:"l"+Date.now(),
       homeowner:f.homeowner.trim(), phone:f.phone.trim(),
-      zip:f.zip.trim(), stormType:f.stormType||"Manual",
+      address:f.address.trim(), zip:f.zip.trim(),
+      stormType:f.stormType||"Manual",
       status:f.status, rooferId:f.rooferId,
       notes:f.notes.trim(), conversations:[],
       contactedAt:null, followupSent:false, adultConfirmed:"unconfirmed",
@@ -1368,6 +1370,7 @@ function AddLeadModal({roofers, defaultRooferId, onClose, onAdd}){
     <Modal title="Add Lead" onClose={onClose}>
       <div style={{display:"flex",flexDirection:"column",gap:13}}>
         <Input label="Homeowner Name" value={f.homeowner} onChange={u("homeowner")} placeholder="Robert Chen"/>
+        <Input label="Street Address" value={f.address} onChange={u("address")} placeholder="1204 Oak Ln"/>
         <div style={grid("1fr 1fr",12)}>
           <Input label="Phone" value={f.phone} onChange={u("phone")} placeholder="972-555-0101"/>
           <Input label="ZIP Code" value={f.zip} onChange={u("zip")} placeholder="75023"/>
@@ -2595,7 +2598,7 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
   const roofer=roofers.find(r=>r.id===lead.rooferId);
   const unread=(lead.conversations||[]).filter(c=>c.role==="lead").length;
   return <TR>
-    <TD bold sub={lead.notes?"↳ "+lead.notes.slice(0,50)+(lead.notes.length>50?"...":""):undefined}>{lead.homeowner}</TD>
+    <TD bold sub={lead.address||(lead.notes?"↳ "+lead.notes.slice(0,40):undefined)}>{lead.homeowner}</TD>
     <TD dim>{lead.phone}</TD>
     <TD>{lead.zip}</TD>
     {showRoofer&&<TD dim>{roofer?.name||"—"}</TD>}
@@ -2656,7 +2659,7 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
     }
     const nextSlot=getNextAvailableSlots(roofer,inspector.id,{limit:1})[0];
     if(!nextSlot){ alert("No available slots found in the next 14 days for "+inspector.name+". Check operating hours in Schedule settings."); return; }
-    const ins={id:"ins"+Date.now(),client:lead.homeowner,address:lead.zip,phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
+    const ins={id:"ins"+Date.now(),client:lead.homeowner,address:(lead.address?`${lead.address}, ${lead.zip}`:lead.zip),phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
     onUpdate("book_lead",{leadId:lead.id,rooferId:roofer.id,inspection:ins});
     const msg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:formatDateLabel(nextSlot.startISO),time:formatTimeLabel(nextSlot.startISO),inspector:inspector.name,company:roofer.name});
     if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer.twilioFrom);
@@ -2975,7 +2978,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
               const inspector=roofer.inspectors.find(i=>i.zones.includes(lead.zip))||roofer.inspectors[0];
               const nextSlot=inspector?getNextAvailableSlots(roofer,inspector.id,{limit:1})[0]:null;
               if(inspector&&nextSlot){
-                const ins={id:"ins"+Date.now(),client:lead.homeowner,address:lead.zip,phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
+                const ins={id:"ins"+Date.now(),client:lead.homeowner,address:(lead.address?`${lead.address}, ${lead.zip}`:lead.zip),phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
                 onUpdate("book_lead",{leadId:lead.id,rooferId:roofer.id,inspection:ins});
                 const bookMsg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:formatDateLabel(nextSlot.startISO),time:formatTimeLabel(nextSlot.startISO),inspector:inspector.name,company:roofer.name});
                 if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,bookMsg,roofer.twilioFrom);
@@ -3020,7 +3023,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
     }
     const nextSlot=getNextAvailableSlots(roofer,inspector.id,{limit:1})[0];
     if(!nextSlot){ alert("No available slots found in the next 14 days for "+inspector.name+"."); return; }
-    const ins={id:"ins"+Date.now(),client:lead.homeowner,address:lead.zip,phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
+    const ins={id:"ins"+Date.now(),client:lead.homeowner,address:(lead.address?`${lead.address}, ${lead.zip}`:lead.zip),phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
     onUpdate("book_lead",{leadId:lead.id,rooferId:lead.rooferId,inspection:ins});
     const msg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:formatDateLabel(nextSlot.startISO),time:formatTimeLabel(nextSlot.startISO),inspector:inspector.name,company:roofer?.name||"us"});
     if(apiKeys.twilio?.sid) sendTwilioSMS(apiKeys.twilio,lead.phone,msg,roofer?.twilioFrom);
