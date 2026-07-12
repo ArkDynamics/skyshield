@@ -699,7 +699,16 @@ Set adultConfirmed to "confirmed" only on an explicit yes. Set it to "denied" if
 async function sendTwilioSMS(creds,to,body,fromOverride){
   const{sid,token,from}=creds;
   const fromNumber=fromOverride||from;
-  await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,{method:"POST",headers:{"Authorization":`Basic ${btoa(sid+":"+token)}`,"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({To:to,From:fromNumber,Body:body})});
+  if(!sid||!token||!fromNumber||!to) return;
+  try{
+    await fetch("/api/twilio-send",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({sid,token,from:fromNumber,to,body}),
+    });
+  }catch(e){
+    console.error("SMS send failed:",e);
+  }
 }
 async function fetchWeatherAlerts(apiKey,zip){
   const res=await fetch(`https://api.weatherapi.com/v1/alerts.json?key=${apiKey}&q=${zip}`);
