@@ -699,31 +699,58 @@ function StatCard({label,value,sub,color=C.orange,icon}){
   </div>;
 }
 function Tabs({tabs,active,onChange}){
-  return <div style={{
-    display:"flex",
-    borderBottom:`1px solid ${C.border}`,
-    marginBottom:20,
-    overflowX:"auto",
-    WebkitOverflowScrolling:"touch",
-    scrollbarWidth:"none", // hide scrollbar on Firefox
-    msOverflowStyle:"none", // hide on IE
-    gap:0,
-    // Fade edges to hint scrollability
-    WebkitMaskImage:"linear-gradient(to right, black 85%, transparent 100%)",
-    maskImage:"linear-gradient(to right, black 85%, transparent 100%)",
-  }}>
-    {tabs.map(t=><button key={t} onClick={()=>onChange(t)} style={{
-      background:"none",border:"none",cursor:"pointer",
-      padding:"10px 16px",
-      fontSize:13,fontWeight:active===t?600:400,
-      color:active===t?C.orange:C.textMuted,
-      borderBottom:active===t?`2px solid ${C.orange}`:"2px solid transparent",
-      marginBottom:-1,whiteSpace:"nowrap",
-      flexShrink:0, // prevent tabs from compressing
-    }}>{t}</button>)}
-    {/* Spacer so last tab isn't under fade */}
-    <div style={{minWidth:24,flexShrink:0}}/>
-  </div>;
+  const isMobile=useIsMobile();
+  if(isMobile){
+    return(
+      <div style={{marginBottom:16}}>
+        <select
+          value={active}
+          onChange={e=>onChange(e.target.value)}
+          style={{
+            width:"100%",
+            background:C.card,
+            border:`1px solid ${C.orange}55`,
+            borderRadius:9,
+            padding:"11px 14px",
+            color:C.text,
+            fontSize:14,
+            fontWeight:600,
+            cursor:"pointer",
+            outline:"none",
+            appearance:"none",
+            WebkitAppearance:"none",
+            backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%232dd4bf' d='M6 8L1 3h10z'/%3E%3C/svg%3E")`,
+            backgroundRepeat:"no-repeat",
+            backgroundPosition:"right 14px center",
+            paddingRight:36,
+          }}>
+          {tabs.map(t=><option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+    );
+  }
+  return(
+    <div style={{
+      display:"flex",
+      borderBottom:`1px solid ${C.border}`,
+      marginBottom:20,
+      overflowX:"auto",
+      WebkitOverflowScrolling:"touch",
+      scrollbarWidth:"none",
+      msOverflowStyle:"none",
+    }}>
+      {tabs.map(t=>(
+        <button key={t} onClick={()=>onChange(t)} style={{
+          background:"none",border:"none",cursor:"pointer",
+          padding:"10px 16px",flexShrink:0,
+          fontSize:13,fontWeight:active===t?600:400,
+          color:active===t?C.orange:C.textMuted,
+          borderBottom:active===t?`2px solid ${C.orange}`:"2px solid transparent",
+          marginBottom:-1,whiteSpace:"nowrap",
+        }}>{t}</button>
+      ))}
+    </div>
+  );
 }
 function Modal({title,onClose,children,wide}){
   const isMobile=useIsMobile();
