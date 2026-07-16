@@ -123,6 +123,9 @@ function rowToRoofer(row){
   };
 }
 
+// ─── RESPONSIVE HOOK ─────────────────────────────────────────────────────────
+function useIsMobile(breakpoint=768){ const[m,setM]=useState(typeof window!=="undefined"&&window.innerWidth<=breakpoint); useEffect(()=>{ const h=()=>setM(window.innerWidth<=breakpoint); window.addEventListener("resize",h); return()=>window.removeEventListener("resize",h); },[breakpoint]); return m; }
+
 // ─── TRIAL HELPERS ────────────────────────────────────────────────────────────
 const TRIAL_DAYS = 14;
 function trialDaysRemaining(roofer){
@@ -138,7 +141,62 @@ function trialExpired(roofer){
   return trialDaysRemaining(roofer) <= 0;
 }
 
-// ─── BILLING API ──────────────────────────────────────────────────────────────
+// ─── LEAD BUILDER API ────────────────────────────────────────────────────────
+// Calls /api/lead-builder to get real homeowner data for a ZIP code.
+// Step 1: get_addresses (free via OpenAddresses/Census)
+// Step 2: skip_trace_batch (Tracerfy $0.04/hit) — async, uses webhook polling
+async function buildLeadsForZip(zip, tracerfyKey, onProgress){
+  try{
+    // Step 1 — get addresses for ZIP (free)
+    onProgress?.(`Fetching addresses for ZIP ${zip}...`);
+    const addrRes = await fetch("/api/lead-builder",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"get_addresses", zip}),
+    });
+    const addrData = await addrRes.json();
+    if(!addrData.success||!addrData.addresses?.length){
+      return { error: addrData.error||"No addresses found for ZIP "+zip, leads:[] };
+    }
+    onProgress?.(`Found ${addrData.addresses.length} addresses — submitting to skip trace...`);
+
+    // Step 2 — submit batch skip trace to Tracerfy
+    const batchRes = await fetch("/api/lead-builder",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"skip_trace_batch", tracerfyKey, zip, addresses:addrData.addresses}),
+    });
+    const batchData = await batchRes.json();
+    if(!batchData.success){
+      return { error: batchData.error||"Batch submission failed", leads:[] };
+    }
+
+    onProgress?.(`Skip trace job submitted (${batchData.count} records) — waiting for results...`);
+
+    // Step 3 — poll for results (Tracerfy is async, typically 30-120 seconds)
+    const jobId = batchData.jobId;
+    let attempts = 0;
+    const maxAttempts = 24; // 2 minutes max (24 × 5s)
+    while(attempts < maxAttempts){
+      await new Promise(r=>setTimeout(r,5000)); // wait 5 seconds between polls
+      attempts++;
+      const pollRes = await fetch("/api/lead-builder",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"get_batch_results", tracerfyKey, jobId, zip}),
+      });
+      const pollData = await pollRes.json();
+      if(pollData.status==="complete"){
+        onProgress?.(`✓ Got ${pollData.leads?.length||0} leads with contact info`);
+        return { leads: pollData.leads||[], jobId };
+      }
+      onProgress?.(`Processing... (${attempts*5}s elapsed, ${pollData.progress||""})`);
+    }
+    return { error:"Timed out waiting for skip trace results — check Tracerfy dashboard for job "+jobId, leads:[] };
+  }catch(e){
+    return { error:e.message, leads:[] };
+  }
+}
 // Calls the Vercel serverless functions in /api/stripe/*.
 // VITE_BILLING_KEY must match SKYSHIELD_API_KEY in your Vercel env vars.
 const BILLING_KEY = import.meta.env?.VITE_BILLING_KEY||"";
@@ -176,10 +234,26 @@ function rowToLead(row){
   };
 }
 function stormToRow(s){
-  return { id:s.id, type:s.type, location:s.location, zip:s.zip, severity:s.severity, date:s.date, processed:!!s.processed, lat:s.lat, lng:s.lng };
+  return {
+    id:s.id, type:s.type, location:s.location, zip:s.zip,
+    severity:s.severity, date:s.date, processed:!!s.processed,
+    lat:s.lat, lng:s.lng,
+    headline:s.headline||s.type,
+    detail:s.detail||{},
+    expires:s.expires||null,
+    source:s.source||"WeatherAPI",
+  };
 }
 function rowToStorm(row){
-  return { id:row.id, type:row.type, location:row.location, zip:row.zip, severity:row.severity, date:row.date, processed:!!row.processed, lat:row.lat, lng:row.lng };
+  return {
+    id:row.id, type:row.type, location:row.location, zip:row.zip,
+    severity:row.severity, date:row.date, processed:!!row.processed,
+    lat:row.lat, lng:row.lng,
+    headline:row.headline||row.type,
+    detail:row.detail||{},
+    expires:row.expires||null,
+    source:row.source||"WeatherAPI",
+  };
 }
 
 // ─── DATA LAYER: LOAD / SAVE / DELETE ────────────────────────────────────────
@@ -190,13 +264,14 @@ function rowToStorm(row){
 
 async function loadAllData(){
   const token=getCurrentAccessToken();
-  const [rooferRows, leadRows, stormRows, appStateRows, seatRows, zipRows] = await Promise.all([
+  const [rooferRows, leadRows, stormRows, appStateRows, seatRows, zipRows, pullRows] = await Promise.all([
     supabaseQuery("roofers", token, "?select=*"),
     supabaseQuery("leads", token, "?select=*"),
     supabaseQuery("storms", token, "?select=*"),
     supabaseQuery("app_state", token, "?id=eq.singleton&select=*"),
     supabaseQuery("seats", token, "?select=*"),
     supabaseQuery("zip_territories", token, "?select=*"),
+    supabaseQuery("zip_lead_pulls", token, "?select=*"),
   ]);
   const appState = Array.isArray(appStateRows) && appStateRows[0] ? appStateRows[0] : null;
   return {
@@ -204,11 +279,12 @@ async function loadAllData(){
     leads: Array.isArray(leadRows) ? leadRows.map(rowToLead) : [],
     storms: Array.isArray(stormRows) ? stormRows.map(rowToStorm) : [],
     activities: appState?.activities || [],
-    scanSettings: appState?.scan_settings || { interval:"daily", startTime:"07:00", lastScan:null },
+    scanSettings: appState?.scan_settings || { interval:"daily", startTime:"07:00", lastScan:null, autoProcess:false, cooldownMonths:3 },
     apiKeys: appState?.api_keys || {},
     lastSeenVersion: appState?.last_seen_version || "0.0.0",
     seats: Array.isArray(seatRows) ? seatRows.map(r=>({id:r.id,account_id:r.account_id,email:r.email,name:r.name||"",role:r.role,status:r.status,permissionOverrides:r.permission_overrides||{}})) : [],
     zipTerritories: Array.isArray(zipRows) ? zipRows : [],
+    zipLeadPulls: Array.isArray(pullRows) ? pullRows : [],
   };
 }
 
@@ -241,18 +317,46 @@ async function saveAppState(partial){
 
 // ─── GLOBAL STYLES ────────────────────────────────────────────────────────────
 const FontLoader = () => (
+  <>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { font-size: 14px; }
-    body { background: #030e18; color: #e2f8f8; font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+    body { background: #030e18; color: #e2f8f8; font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: #040f1b; }
     ::-webkit-scrollbar-thumb { background: #2dd4bf; border-radius: 3px; }
     input, select, textarea, button { font-family: 'Inter', sans-serif; }
     table { border-collapse: collapse; }
     a { text-decoration: none; }
+    /* Mobile table scroll */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    /* Mobile nav hide */
+    @media (max-width: 640px) {
+      .nav-links { display: none !important; }
+      .desktop-only { display: none !important; }
+      .mobile-only { display: flex !important; }
+      .stat-grid { grid-template-columns: repeat(2,1fr) !important; }
+      .stat-grid-4 { grid-template-columns: repeat(2,1fr) !important; }
+      .feature-grid { grid-template-columns: 1fr !important; }
+      .plan-grid { grid-template-columns: 1fr !important; }
+      .hero-title { font-size: 32px !important; }
+      .hero-btns { flex-direction: column !important; }
+      .two-col { grid-template-columns: 1fr !important; }
+      .three-col { grid-template-columns: 1fr !important; }
+      .four-col { grid-template-columns: repeat(2,1fr) !important; }
+      .addon-grid { grid-template-columns: 1fr !important; }
+      .how-grid { grid-template-columns: repeat(2,1fr) !important; }
+      .contact-grid { grid-template-columns: 1fr !important; }
+    }
+    @media (max-width: 900px) {
+      .plan-grid { grid-template-columns: 1fr !important; }
+      .three-col { grid-template-columns: 1fr 1fr !important; }
+      .contact-grid { grid-template-columns: 1fr !important; }
+    }
   `}</style>
+  </>
 );
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
@@ -598,9 +702,18 @@ function Tabs({tabs,active,onChange}){
   </div>;
 }
 function Modal({title,onClose,children,wide}){
-  const w=wide?Math.min(680,window.innerWidth-32):Math.min(480,window.innerWidth-32);
-  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={e=>e.target===e.currentTarget&&onClose()}>
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,width:w,maxHeight:"90vh",overflow:"auto",boxShadow:"0 24px 60px rgba(0,0,0,0.5)"}}>
+  const isMobile=useIsMobile();
+  const w=isMobile?"100%":wide?Math.min(680,window.innerWidth-32):Math.min(480,window.innerWidth-32);
+  return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:1000,
+    display:"flex",
+    alignItems:isMobile?"flex-end":"center",
+    justifyContent:"center",
+    padding:isMobile?0:16}}
+    onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div style={{background:C.card,border:`1px solid ${C.border}`,
+      borderRadius:isMobile?"16px 16px 0 0":"12px",
+      width:w,maxHeight:isMobile?"90vh":"90vh",
+      overflow:"auto",boxShadow:"0 24px 60px rgba(0,0,0,0.5)"}}>
       <div style={{...flex(0,"center","space-between"),padding:"16px 20px",borderBottom:`1px solid ${C.border}`}}>
         <span style={T.head(15,600)}>{title}</span>
         <button onClick={onClose} style={{background:"none",border:"none",color:C.textMuted,cursor:"pointer",fontSize:22,lineHeight:1,padding:"0 4px"}}>×</button>
@@ -913,8 +1026,8 @@ Explain features clearly. If they ask how to do something, walk them through it 
     <>
       {/* Chat window */}
       {open&&<div style={{
-        position:"fixed",bottom:84,right:24,zIndex:9998,
-        width:360,height:480,
+        position:"fixed",bottom:80,right:12,zIndex:9998,
+        width:Math.min(360,window.innerWidth-24),height:Math.min(480,window.innerHeight-100),
         background:C.card,
         border:`1px solid ${C.borderAct}`,
         borderRadius:18,
@@ -1013,8 +1126,8 @@ Explain features clearly. If they ask how to do something, walk them through it 
 
       {/* Floating bubble button */}
       <button onClick={()=>setOpen(o=>!o)} style={{
-        position:"fixed",bottom:24,right:24,zIndex:9999,
-        width:52,height:52,borderRadius:"50%",
+        position:"fixed",bottom:16,right:12,zIndex:9999,
+        width:48,height:48,borderRadius:"50%",
         background:"linear-gradient(135deg,#0d9488,#0284c7)",
         border:"none",cursor:"pointer",
         display:"flex",alignItems:"center",justifyContent:"center",
@@ -1103,16 +1216,46 @@ Always explain in plain English first, then include action blocks. Ask for clari
 }
 
 // ─── MODALS ───────────────────────────────────────────────────────────────────
-function ConversationModal({lead,roofer,onClose,onSendMessage,onUpdateNotes}){
+function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNotes}){
   const[msg,setMsg]=useState(""),[notes,setNotes]=useState(lead.notes||""),[editing,setEditing]=useState(false);
   const bot=useRef(null);
   useEffect(()=>bot.current?.scrollIntoView({behavior:"smooth"}),[lead.conversations]);
+
+  // Find storms that match this lead's ZIP
+  const relatedStorms=(storms||[]).filter(s=>s.zip===lead.zip);
+
   return <Modal title={`${lead.homeowner} — ${lead.phone}`} onClose={onClose} wide>
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{...flex(12,"center","space-between"),padding:"8px 12px",background:C.surface,borderRadius:7,flexWrap:"wrap",gap:6}}>
         <div style={flex(12)}><span style={{fontSize:12,color:C.textSub}}>{lead.address?`${lead.address}, `:""}ZIP {lead.zip}</span><span style={{fontSize:12,color:C.textSub}}>⛈ {lead.stormType}</span></div>
         <div style={flex(6)}><StatusBadge status={lead.status}/><AdultBadge status={lead.adultConfirmed}/></div>
       </div>
+
+      {/* Storm context for this ZIP */}
+      {relatedStorms.length>0&&<div style={{background:`${C.orange}08`,border:`1px solid ${C.orange}22`,borderRadius:8,padding:"10px 14px"}}>
+        <div style={{fontSize:11,fontWeight:600,color:C.orange,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>
+          Storm Events in ZIP {lead.zip}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {relatedStorms.map(s=>(
+            <div key={s.id} style={{display:"flex",alignItems:"flex-start",gap:8}}>
+              <div style={{width:6,height:6,borderRadius:"50%",marginTop:4,flexShrink:0,
+                background:s.severity==="extreme"?C.red:s.severity==="severe"?C.yellow:C.blue}}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:500,color:C.text}}>
+                  {s.type} — {s.date}
+                  {s.detail?.hailSize&&<span style={{color:C.orange,marginLeft:8}}>◆ {s.detail.hailSize} hail</span>}
+                  {s.detail?.windSpeed&&<span style={{color:C.blue,marginLeft:8}}>→ {s.detail.windSpeed}</span>}
+                  {s.detail?.efRating&&<span style={{color:C.red,marginLeft:8}}>{s.detail.efRating}</span>}
+                </div>
+                {s.headline&&s.headline!==s.type&&<div style={{fontSize:10,color:C.textSub,marginTop:1}}>{s.headline}</div>}
+              </div>
+              <Badge label={s.severity} color={s.severity==="extreme"?C.red:s.severity==="severe"?C.yellow:C.blue} small/>
+            </div>
+          ))}
+        </div>
+      </div>}
+
       <div style={{...card({padding:12})}}>
         <div style={{...flex(0,"center","space-between"),marginBottom:editing?8:0}}>
           <span style={T.label}>Notes</span>
@@ -1567,17 +1710,59 @@ function AddInspectionModal({roofer,onClose,onAdd,onReschedule,leadToBook,existi
 
 // ─── SCAN SCHEDULER ───────────────────────────────────────────────────────────
 function ScanScheduler({scanSettings,onChange}){
-  const[st,setSt]=useState(scanSettings);
+  const[st,setSt]=useState({autoProcess:false,cooldownMonths:3,...scanSettings});
   const upd=k=>v=>{const n={...st,[k]:v};setSt(n);onChange(n);};
   return <div style={card()}>
-    <div style={{...T.head(13,600),marginBottom:14}}>⚡ Auto Storm Scan Schedule</div>
+    <div style={{...T.head(13,600),marginBottom:14}}>Auto Storm Scan & Processing</div>
     <div style={grid("1fr 1fr",12)}>
-      <Select label="Frequency" value={st.interval} onChange={upd("interval")} options={SCAN_INTERVALS}/>
+      <Select label="Scan Frequency" value={st.interval} onChange={upd("interval")} options={SCAN_INTERVALS}/>
       <Input label="Daily Start Time" type="time" value={st.startTime} onChange={upd("startTime")}/>
     </div>
-    <div style={{marginTop:10,padding:"8px 12px",background:C.orangeDim,borderRadius:6,fontSize:12,color:C.textSub,border:`1px solid ${C.orange}22`}}>
-      {st.interval==="manual"?"⚠ Manual only — use Run Scan button":`✓ ${SCAN_INTERVALS.find(i=>i.value===st.interval)?.label} starting at ${st.startTime}`}
-      {st.lastScan&&<span style={{marginLeft:8,color:C.textMuted}}>· Last: {st.lastScan}</span>}
+    <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:12}}>
+      {/* Auto-process toggle */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+        padding:"10px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+        <div>
+          <div style={{fontSize:13,fontWeight:600,color:C.text}}>Auto-Process New Storms</div>
+          <div style={{fontSize:11,color:C.textSub,marginTop:2}}>
+            When a qualifying storm is detected, automatically pull homeowner leads and distribute to roofers — no manual action needed
+          </div>
+        </div>
+        <button onClick={()=>upd("autoProcess")(!st.autoProcess)} style={{
+          width:44,height:24,borderRadius:12,border:"none",cursor:"pointer",flexShrink:0,marginLeft:16,
+          background:st.autoProcess?C.green:C.border,position:"relative",transition:"background 0.2s",
+        }}>
+          <div style={{width:20,height:20,borderRadius:"50%",background:"#fff",
+            position:"absolute",top:2,left:st.autoProcess?22:2,transition:"left 0.2s"}}/>
+        </button>
+      </div>
+      {/* Cooldown setting */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+        padding:"10px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+        <div>
+          <div style={{fontSize:13,fontWeight:600,color:C.text}}>ZIP Code Cooldown Period</div>
+          <div style={{fontSize:11,color:C.textSub,marginTop:2}}>
+            Don't re-pull leads for a ZIP within this many months — prevents contacting the same homeowners repeatedly
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0,marginLeft:16}}>
+          <select value={st.cooldownMonths||3} onChange={e=>upd("cooldownMonths")(Number(e.target.value))}
+            style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
+              padding:"6px 10px",color:C.text,fontSize:13,cursor:"pointer"}}>
+            {[1,2,3,4,5,6].map(m=><option key={m} value={m}>{m} month{m>1?"s":""}</option>)}
+          </select>
+        </div>
+      </div>
+    </div>
+    <div style={{marginTop:10,padding:"8px 12px",
+      background:st.autoProcess?C.greenDim:C.orangeDim,
+      borderRadius:6,fontSize:12,
+      color:st.autoProcess?C.green:C.textSub,
+      border:`1px solid ${st.autoProcess?C.green+"22":C.orange+"22"}`}}>
+      {st.interval==="manual"
+        ?"Manual scan only — auto-processing will still run when you click Run Scan"
+        :`${SCAN_INTERVALS.find(i=>i.value===st.interval)?.label} · ${st.autoProcess?"Auto-processing ON":"Auto-processing OFF"} · ${st.cooldownMonths||3}-month ZIP cooldown`}
+      {st.lastScan&&<span style={{marginLeft:8,color:C.textMuted}}>· Last scan: {st.lastScan}</span>}
     </div>
   </div>;
 }
@@ -1676,6 +1861,7 @@ function WhatsNewModal({onDismiss}){
 
 // ─── LANDING PAGE ─────────────────────────────────────────────────────────────
 function LandingPage({onSignIn, showLogin, onLoginSuccess}){
+  const isMobile=useIsMobile();
   const[demoName,setDemoName]=useState("");
   const[demoEmail,setDemoEmail]=useState("");
   const[demoPhone,setDemoPhone]=useState("");
@@ -1875,7 +2061,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
             animation:"pulse 1.5s ease-in-out infinite"}}/>
           <span style={{fontSize:12,fontWeight:600,color:C.orange}}>Built exclusively for roofing companies</span>
         </div>
-        <h1 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:58,fontWeight:800,
+        <h1 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:isMobile?30:58,fontWeight:800,
           lineHeight:1.08,letterSpacing:"-0.03em",color:"#fff",marginBottom:20,
           animation:"fadeUp 0.7s ease forwards"}}>
           Turn Every Storm Into a<br/>
@@ -1888,7 +2074,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
           animation:"fadeUp 0.8s ease forwards"}}>
           SkyShield Pro automatically detects storms, contacts homeowners by SMS, qualifies leads with AI, and books inspections — all before your competitors even know the storm hit.
         </p>
-        <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap",marginBottom:16,
+        <div style={{display:"flex",flexDirection:isMobile?"column":"row",gap:12,justifyContent:"center",alignItems:"center",flexWrap:"wrap",marginBottom:16,
           animation:"fadeUp 0.9s ease forwards"}}>
           <button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
             style={{fontSize:15,fontWeight:700,padding:"15px 34px",borderRadius:10,
@@ -1907,7 +2093,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
         </div>
 
         {/* ── ANIMATED STAT COUNTERS ── */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:40}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"repeat(2,1fr)":"repeat(4,1fr)",gap:12,marginBottom:40}}>
           {[
             {label:"Leads Generated",value:count.leads.toLocaleString(),suffix:"+",color:"#2dd4bf"},
             {label:"Storms Tracked",value:count.storms,suffix:"",color:"#38bdf8"},
@@ -1941,7 +2127,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
               skyshield-sigma.vercel.app
             </div>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:12}}>
+          <div style={{display:"grid",gridTemplateColumns:isMobile?"repeat(2,1fr)":"repeat(4,1fr)",gap:10,marginBottom:12}}>
             {[{l:"Active Leads",v:"24",c:C.orange},{l:"Booked Today",v:"7",c:"#2dd4bf"},{l:"MRR",v:"$2,388",c:"#4ade80"},{l:"Storms",v:"3",c:C.blue}].map(s=>(
               <div key={s.l} style={{background:C.surface,borderRadius:10,padding:"12px 14px",border:`1px solid ${C.border}`}}>
                 <div style={{fontSize:9,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>{s.l}</div>
@@ -1996,7 +2182,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
             Every feature was designed around the storm response workflow — from first alert to closed deal.
           </p>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(3,1fr)",gap:16}}>
           {FEATURES.map((f,fi)=>(
             <div key={f.title} style={{background:"rgba(255,255,255,0.03)",backdropFilter:"blur(20px)",
               border:`1px solid rgba(255,255,255,0.07)`,borderRadius:16,padding:28,
@@ -2028,7 +2214,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
           </div>
 
           {/* Steps with connecting line */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:0,position:"relative",marginBottom:64}}>
+          <div style={{display:"grid",gridTemplateColumns:isMobile?"repeat(2,1fr)":"repeat(4,1fr)",gap:isMobile?16:0,position:"relative",marginBottom:64}}>
             <div style={{position:"absolute",top:27,left:"12.5%",right:"12.5%",height:1,
               background:`linear-gradient(90deg,${C.orange}66,${C.blue}66)`,zIndex:0}}/>
             {[
@@ -2059,7 +2245,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
           </div>
 
           {/* ── STORM MAP + SMS MOCKUP side by side ── */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+          <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:20}}>
 
             {/* Animated Storm Map */}
             <div style={{background:"rgba(7,24,40,0.9)",border:`1px solid ${C.border}`,borderRadius:16,padding:20,
@@ -2211,7 +2397,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
         </div>
 
         {/* Plan cards */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:40}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(3,1fr)",gap:16,marginBottom:40}}>
           {PLANS.map(p=>{
             const price = billingCycle==="monthly" ? p.monthly : p.annual;
             const monthlyEquiv = billingCycle==="annual" ? p.annualMonthly : null;
@@ -2317,7 +2503,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
               Real results from real roofing companies
             </h2>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
+          <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(3,1fr)",gap:16}}>
             {TESTIMONIALS.map(t=>(
               <div key={t.name} style={{background:"rgba(7,24,40,0.9)",border:`1px solid ${C.border}`,
                 borderRadius:16,padding:28,
@@ -2353,7 +2539,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
 
       {/* ── CONTACT / CTA ── */}
       <section id="contact" style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:"80px 24px"}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:60,alignItems:"center"}}>
+        <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:isMobile?32:60,alignItems:"center"}}>
           <div>
             <div style={{fontSize:12,fontWeight:600,color:C.orange,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:12}}>Get Started</div>
             <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:38,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:16,lineHeight:1.15}}>
@@ -2630,6 +2816,7 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
 
 // ─── ROOFER DASHBOARD ─────────────────────────────────────────────────────────
 function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
+  const isMobile=useIsMobile();
   const[tab,setTab]=useState("Overview");
   const[showAddInspector,setShowAddInspector]=useState(false);
   const[bookingModal,setBookingModal]=useState(null); // {leadToBook} | {existingInspection} | {} for blank manual
@@ -2708,7 +2895,7 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
         onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"reschedule",message:`Rescheduled: ${ins.client} moved to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}`,smsText:`SkyShield Pro: ${ins.client}'s inspection was moved to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}.`}});
       }}/>}
     {editingLead&&<EditLeadModal lead={editingLead} roofers={[roofer]} onClose={()=>setEditingLead(null)} onSave={l=>onUpdate("edit_lead",{lead:l})}/>}
-    {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofer} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
+    {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofer} storms={[]} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
     <Tabs tabs={["Overview","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={setTab}/>
@@ -2721,7 +2908,7 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
         <StatCard label="Revenue" value={`$${roofer.revenue.toLocaleString()}`} color={C.purple} icon="$"/>
         <StatCard label="Conv. Rate" value={`${myLeads.length>0?Math.round(won.length/myLeads.length*100):0}%`} color={C.yellow} icon="📈"/>
       </div>
-      <div style={grid("1fr 1fr",16)}>
+      <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:16}}>
         <div style={card()}>
           <div style={{...T.head(13,600),marginBottom:14}}>Lead Pipeline</div>
           <MiniBarChart data={[{label:"Total",value:myLeads.length,color:C.orange},{label:"Contacted",value:contacted.length,color:C.blue},{label:"Booked",value:scheduled.length,color:C.purple},{label:"Won",value:won.length,color:C.green}]}/>
@@ -2872,7 +3059,193 @@ function QuickAssignRow({roofer,onSave}){
 }
 
 // ─── COMMAND CENTER ───────────────────────────────────────────────────────────
-function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,scanSettings,onScanSettingsChange,activities,addActivity,zipTerritories}){
+// ─── STORM DETAIL PANEL ───────────────────────────────────────────────────────
+function StormDetailPanel({storm, leads, roofers, apiKeys, onClose}){
+  const[history,setHistory]=useState([]);
+  const[loadingHistory,setLoadingHistory]=useState(false);
+  const[historyError,setHistoryError]=useState("");
+
+  const affectedLeads=leads.filter(l=>l.zip===storm.zip);
+  const sevColor=s=>s==="extreme"?C.red:s==="severe"?C.yellow:C.blue;
+
+  async function fetchHistory(){
+    setLoadingHistory(true);
+    setHistoryError("");
+    try{
+      const res=await fetch("/api/weather-scan",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"noaa_zip_history",zip:storm.zip,lat:storm.lat,lng:storm.lng}),
+      });
+      const data=await res.json();
+      if(data.events&&data.events.length>0){
+        setHistory(data.events);
+      } else {
+        setHistoryError(data.note||"No historical storm data found for this ZIP from NOAA.");
+      }
+    }catch(e){
+      setHistoryError("Failed to fetch history: "+e.message);
+    }
+    setLoadingHistory(false);
+  }
+
+  return(
+    <div style={{...card({border:`1px solid ${sevColor(storm.severity)}44`,padding:0}),overflow:"hidden"}}>
+      {/* Header */}
+      <div style={{
+        padding:"16px 20px",
+        background:`linear-gradient(135deg,${sevColor(storm.severity)}15,${sevColor(storm.severity)}08)`,
+        borderBottom:`1px solid ${C.border}`,
+        display:"flex",alignItems:"flex-start",justifyContent:"space-between",
+      }}>
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+            <div style={{width:36,height:36,borderRadius:10,
+              background:`${sevColor(storm.severity)}22`,border:`1px solid ${sevColor(storm.severity)}44`,
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>
+              {storm.type==="Tornado"?"🌪":storm.type==="Hurricane"?"🌀":storm.type==="Hail"?"◆":storm.type==="Flash Flood"?"💧":"⚡"}
+            </div>
+            <div>
+              <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:17,fontWeight:700,color:C.text}}>
+                {storm.type} — {storm.location}
+              </div>
+              <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{storm.headline}</div>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <Badge label={storm.severity} color={sevColor(storm.severity)}/>
+            <Badge label={`ZIP ${storm.zip}`} color={C.textSub} small/>
+            <Badge label={storm.date} color={C.textSub} small/>
+            {storm.source&&<Badge label={storm.source} color={C.textMuted} small/>}
+            {storm.expires&&<Badge label={`Expires: ${new Date(storm.expires).toLocaleDateString()}`} color={C.yellow} small/>}
+          </div>
+        </div>
+        <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",
+          color:C.textMuted,fontSize:20,lineHeight:1,padding:4}}>✕</button>
+      </div>
+
+      <div style={{padding:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        {/* Storm details */}
+        <div>
+          <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",
+            letterSpacing:"0.07em",marginBottom:12}}>Storm Details</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {storm.detail?.hailSize&&<div style={detailRow()}>
+              <span style={{fontSize:12,color:C.textSub}}>Hail Size</span>
+              <span style={{fontSize:13,fontWeight:600,color:C.orange}}>{storm.detail.hailSize}</span>
+            </div>}
+            {storm.detail?.hailDescription&&<div style={detailRow()}>
+              <span style={{fontSize:12,color:C.textSub}}>Size Reference</span>
+              <span style={{fontSize:12,color:C.text}}>{storm.detail.hailDescription}</span>
+            </div>}
+            {storm.detail?.windSpeed&&<div style={detailRow()}>
+              <span style={{fontSize:12,color:C.textSub}}>Wind Speed</span>
+              <span style={{fontSize:13,fontWeight:600,color:C.blue}}>{storm.detail.windSpeed}</span>
+            </div>}
+            {storm.detail?.windDescription&&<div style={detailRow()}>
+              <span style={{fontSize:12,color:C.textSub}}>Wind Category</span>
+              <span style={{fontSize:12,color:C.text}}>{storm.detail.windDescription}</span>
+            </div>}
+            {storm.detail?.efRating&&<div style={detailRow()}>
+              <span style={{fontSize:12,color:C.textSub}}>EF Rating</span>
+              <span style={{fontSize:13,fontWeight:700,color:C.red}}>{storm.detail.efRating}</span>
+            </div>}
+            {storm.detail?.category&&<div style={detailRow()}>
+              <span style={{fontSize:12,color:C.textSub}}>Category</span>
+              <span style={{fontSize:13,fontWeight:700,color:C.red}}>{storm.detail.category}</span>
+            </div>}
+            <div style={detailRow()}>
+              <span style={{fontSize:12,color:C.textSub}}>Roof Damage Risk</span>
+              <span style={{fontSize:12,fontWeight:600,color:sevColor(storm.severity)}}>
+                {storm.severity==="extreme"?"Very High":storm.severity==="severe"?"High":"Moderate"}
+              </span>
+            </div>
+            {storm.type==="Hail"&&<div style={{
+              marginTop:8,padding:"10px 12px",
+              background:`${C.orange}10`,border:`1px solid ${C.orange}22`,borderRadius:8,
+              fontSize:11,color:C.textSub,lineHeight:1.6,
+            }}>
+              <strong style={{color:C.orange}}>Damage Note:</strong>{" "}
+              {!storm.detail?.hailSize
+                ?"Hail was reported in this area — size unconfirmed. Inspection recommended."
+                :parseFloat(storm.detail.hailSize)>=2
+                ?"Hail this size causes severe roof damage — shingles, gutters, and skylights are likely damaged."
+                :parseFloat(storm.detail.hailSize)>=1
+                ?"Hail this size can cause significant dents and cracks in roofing materials."
+                :parseFloat(storm.detail.hailSize)>=0.75
+                ?"Hail at this size may cause cosmetic damage — inspection recommended."
+                :"Small hail reported. Cosmetic damage possible — worth a free inspection to confirm."}
+            </div>}
+          </div>
+        </div>
+
+        {/* Affected leads */}
+        <div>
+          <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",
+            letterSpacing:"0.07em",marginBottom:12}}>
+            Affected Leads in ZIP {storm.zip} ({affectedLeads.length})
+          </div>
+          {affectedLeads.length===0
+            ? <div style={{fontSize:12,color:C.textMuted,fontStyle:"italic"}}>No leads yet for this ZIP. Process this storm to generate leads.</div>
+            : <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:200,overflowY:"auto"}}>
+                {affectedLeads.map(l=>{
+                  const roofer=roofers.find(r=>r.id===l.rooferId);
+                  return(
+                    <div key={l.id} style={{display:"flex",alignItems:"center",gap:8,
+                      padding:"8px 10px",background:C.surface,borderRadius:7,
+                      border:`1px solid ${C.border}`}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:12,fontWeight:600,color:C.text,
+                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.homeowner}</div>
+                        <div style={{fontSize:10,color:C.textSub}}>{roofer?.name||"Unassigned"}</div>
+                      </div>
+                      <Badge label={l.status} color={l.status==="scheduled"?C.green:l.status==="contacted"?C.blue:C.orange} small/>
+                    </div>
+                  );
+                })}
+              </div>
+          }
+        </div>
+      </div>
+
+      {/* Historical data section */}
+      <div style={{padding:"0 20px 20px"}}>
+        <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16}}>
+          <div style={{...flex(0,"center","space-between"),marginBottom:12}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em"}}>
+              Historical Storm Data (NOAA / NWS)
+            </div>
+            <Btn small variant="info" onClick={fetchHistory} disabled={loadingHistory}>
+              {loadingHistory?"Fetching...":"Fetch History"}
+            </Btn>
+          </div>
+          {historyError&&<div style={{fontSize:12,color:C.textMuted,fontStyle:"italic",marginBottom:8}}>{historyError}</div>}
+          {history.length>0&&<div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {history.map((h,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:10,
+                padding:"8px 12px",background:C.surface,borderRadius:7,
+                border:`1px solid ${C.border}`}}>
+                <div style={{width:8,height:8,borderRadius:2,background:h.severity==="extreme"?C.red:h.severity==="severe"?C.yellow:C.blue,flexShrink:0}}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,fontWeight:500,color:C.text}}>{h.type} — {h.size||h.detail||""}</div>
+                  <div style={{fontSize:10,color:C.textSub}}>{h.date} · {h.location} · {h.source}</div>
+                </div>
+                <Badge label={h.severity} color={h.severity==="extreme"?C.red:h.severity==="severe"?C.yellow:C.blue} small/>
+              </div>
+            ))}
+          </div>}
+          {!loadingHistory&&history.length===0&&!historyError&&<div style={{fontSize:12,color:C.textMuted,fontStyle:"italic"}}>
+            Click "Fetch History" to pull historical storm data from NOAA/NWS for this area.
+          </div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function detailRow(){ return {display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 10px",background:C.surface,borderRadius:6,border:`1px solid ${C.border}`}; }
+
+function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,scanSettings,onScanSettingsChange,activities,addActivity,zipTerritories,zipLeadPulls,setZipLeadPulls}){
   const[tab,setTab]=useState("Overview");
   const[showAddRoofer,setShowAddRoofer]=useState(false);
   const[editingRoofer,setEditingRoofer]=useState(null);
@@ -2885,33 +3258,200 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
   const[rooferFilter,setRooferFilter]=useState("all");
   const[fetchingTwilio,setFetchingTwilio]=useState(false);
   const[showAddLeadAdmin,setShowAddLeadAdmin]=useState(false);
+  const[selectedStorm,setSelectedStorm]=useState(null);
 
   const totalMRR=roofers.filter(r=>r.status==="active").reduce((a,r)=>a+PLAN_PRICES[r.plan],0);
   const pending=leads.filter(l=>l.status==="pending");
 
+  // ── COOLDOWN HELPER ──────────────────────────────────────────────────────
+  function zipOnCooldown(zip){
+    const pull = (zipLeadPulls||[]).find(p=>p.zip_code===zip);
+    if(!pull) return false;
+    const months = scanSettings.cooldownMonths||3;
+    const cooldownMs = months * 30 * 24 * 60 * 60 * 1000;
+    return (Date.now() - new Date(pull.last_pulled_at).getTime()) < cooldownMs;
+  }
+
+  function cooldownRemainingDays(zip){
+    const pull = (zipLeadPulls||[]).find(p=>p.zip_code===zip);
+    if(!pull) return 0;
+    const months = scanSettings.cooldownMonths||3;
+    const cooldownMs = months * 30 * 24 * 60 * 60 * 1000;
+    const elapsed = Date.now() - new Date(pull.last_pulled_at).getTime();
+    return Math.max(0, Math.ceil((cooldownMs - elapsed) / (24*60*60*1000)));
+  }
+
+  async function recordZipPull(zip, leadCount, stormType){
+    const record = { zip_code:zip, last_pulled_at:new Date().toISOString(), lead_count:leadCount, storm_type:stormType };
+    try{ await supabaseUpsert("zip_lead_pulls", getCurrentAccessToken(), record); }
+    catch(e){ console.warn("Failed to record ZIP pull:", e); }
+    setZipLeadPulls(p=>[...p.filter(x=>x.zip_code!==zip), record]);
+  }
+
+  // ── AUTO PROCESS A SINGLE STORM ──────────────────────────────────────────
+  async function autoProcessStorm(storm){
+    const eligible = roofers.filter(r=>
+      r.status==="active" &&
+      (r.territories.includes(storm.zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===storm.zip))
+    );
+    if(!eligible.length) return { skipped:"no_roofers" };
+
+    const stormNote = "Storm: "+(storm.headline||storm.type)+(storm.detail?.hailSize?" | Hail: "+storm.detail.hailSize:"")+(storm.detail?.windSpeed?" | Wind: "+storm.detail.windSpeed:"");
+    const stormDesc = storm.detail?.hailSize
+      ? `a ${storm.detail.hailSize} hail storm`
+      : storm.detail?.windSpeed
+      ? `a ${storm.detail.windSpeed} wind event`
+      : `a ${storm.type.toLowerCase()}`;
+
+    // ── COOLDOWN: re-engage existing leads instead of pulling new data ────────
+    if(zipOnCooldown(storm.zip)){
+      const existingLeads = leads.filter(l=>l.zip===storm.zip);
+
+      // Categorize existing leads
+      const toReEngage   = existingLeads.filter(l=>l.status==="pending"&&!l.contactedAt); // never responded
+      const toFollowUp   = existingLeads.filter(l=>l.status==="contacted");               // reached out, no response
+      const toSkip       = existingLeads.filter(l=>l.status==="cold"||l.status==="won"||l.status==="scheduled");
+
+      let reEngaged=0, followedUp=0;
+
+      // Re-engage: pending leads who were never contacted — treat as fresh outreach
+      for(const lead of toReEngage){
+        const roofer = eligible.find(r=>r.id===lead.rooferId)||eligible[0];
+        if(!roofer) continue;
+        const creds = apiKeys.twilio;
+        if(creds?.sid&&lead.phone){
+          const msg = await callClaude([{role:"user",content:`Write a short friendly SMS (under 160 chars) for a roofing company reaching out to ${lead.homeowner} about ${stormDesc} that hit their area at ZIP ${storm.zip}. Company is ${roofer.name}. This is a first contact. Offer a free inspection. Natural, not salesy.`}],"You write short professional SMS messages for roofing companies.",200);
+          await sendTwilioSMS(creds, lead.phone, msg, roofer.twilioFrom);
+          onUpdate("update_lead",{lead:{...lead,status:"contacted",contactedAt:new Date().toISOString(),conversations:[...(lead.conversations||[]),{role:"ai",msg,ts:new Date().toLocaleString()}]}});
+        }
+        reEngaged++;
+      }
+
+      // Follow-up: leads already contacted but never responded
+      for(const lead of toFollowUp){
+        const roofer = eligible.find(r=>r.id===lead.rooferId)||eligible[0];
+        if(!roofer) continue;
+        const creds = apiKeys.twilio;
+        if(creds?.sid&&lead.phone){
+          const lastContact = lead.conversations?.slice(-1)[0]?.ts||"recently";
+          const msg = await callClaude([{role:"user",content:`Write a short follow-up SMS (under 160 chars) for ${lead.homeowner}. We previously contacted them about roof damage and they haven't responded. Now ${stormDesc} just hit their area again at ZIP ${storm.zip}. Company is ${roofer.name}. Reference that this is a follow-up and there's been another storm. Keep it brief and friendly, no pressure.`}],"You write short professional SMS messages for roofing companies.",200);
+          await sendTwilioSMS(creds, lead.phone, msg, roofer.twilioFrom);
+          onUpdate("update_lead",{lead:{...lead,followupSent:true,conversations:[...(lead.conversations||[]),{role:"ai",msg,ts:new Date().toLocaleString(),isFollowup:true}]}});
+        }
+        followedUp++;
+      }
+
+      const daysLeft = cooldownRemainingDays(storm.zip);
+      addActivity({
+        type:"storm",
+        message:`ZIP ${storm.zip} on cooldown (${daysLeft}d left) — re-engaged ${reEngaged} pending + ${followedUp} follow-ups · ${toSkip.length} skipped (won/cold/scheduled)`,
+        badge:"re-engage",
+        badgeColor:C.blue,
+      });
+      onUpdate("process_storm",{stormId:storm.id});
+      return { success:true, reEngaged, followedUp, skipped:toSkip.length, cooldown:true };
+    }
+
+    // ── FRESH ZIP: pull new Tracerfy data ─────────────────────────────────────
+    const tracerfyKey = apiKeys.tracerfy;
+
+    if(tracerfyKey){
+      const result = await buildLeadsForZip(storm.zip, tracerfyKey, msg=>setScanStatus(msg));
+      if(result.error){ addActivity({type:"system",message:`ZIP ${storm.zip} lead pull failed: ${result.error}`,badge:"error",badgeColor:C.red}); return { error:result.error }; }
+      if(!result.leads.length){ return { skipped:"no_results" }; }
+
+      let rooferIdx = 0;
+      result.leads.forEach(lead=>{
+        const r = eligible[rooferIdx % eligible.length];
+        rooferIdx++;
+        onUpdate("add_lead",{lead:{
+          id:"l"+Date.now()+Math.random(),
+          homeowner:lead.homeowner, phone:lead.phone, email:lead.email||"",
+          address:lead.address, zip:storm.zip, rooferId:r.id,
+          stormType:storm.type, status:"pending", conversations:[],
+          notes:stormNote, contactedAt:null, followupSent:false,
+        }});
+      });
+
+      onUpdate("process_storm",{stormId:storm.id});
+      await recordZipPull(storm.zip, result.leads.length, storm.type);
+      addActivity({type:"storm",message:`Auto-processed: ${result.leads.length} real leads for ZIP ${storm.zip} (${storm.type})`,badge:`${result.leads.length} leads`,badgeColor:C.green});
+      return { success:true, count:result.leads.length };
+
+    } else {
+      // Demo fallback — no Tracerfy key
+      const leadCount = Math.max(1, Math.min(eligible.length*3, 12));
+      const assignments = distributeLeadsRoundRobin(eligible, leadCount);
+      assignments.forEach(a=>onUpdate("add_lead",{lead:{
+        id:"l"+Date.now()+Math.random(),
+        homeowner:a.homeowner, phone:a.phone, zip:storm.zip,
+        rooferId:a.rooferId, stormType:storm.type, status:"pending",
+        conversations:[], notes:stormNote, contactedAt:null, followupSent:false,
+      }}));
+      onUpdate("process_storm",{stormId:storm.id});
+      await recordZipPull(storm.zip, leadCount, storm.type);
+      addActivity({type:"storm",message:`Auto-processed: ${leadCount} demo leads for ZIP ${storm.zip} — add Tracerfy key for real data`,badge:`${leadCount} leads`,badgeColor:C.orange});
+      return { success:true, count:leadCount };
+    }
+  }
+
   const runScan=useCallback(async(auto=false)=>{
     if(!auto) setScanStatus("Scanning...");
-    if(apiKeys.weather){
-      try{
-        const zips=[...new Set([...roofers.flatMap(r=>r.territories),...(zipTerritories||[]).map(zt=>zt.zip_code)])];
-        let found=0;
-        for(const zip of zips.slice(0,5)){
-          const data=await fetchWeatherAlerts(apiKeys.weather,zip);
-          (data.alerts?.alert||[]).forEach(a=>{
-            const desc=(a.headline||"").toLowerCase();
-            if(["hail","tornado","wind","thunderstorm","severe"].some(k=>desc.includes(k))){
-              onUpdate("add_storm",{storm:{id:"s"+Date.now()+zip,type:"Weather Alert",location:zip,zip,severity:"severe",date:new Date().toISOString().split("T")[0],processed:false,lat:null,lng:null}});
-              found++;
+    if(!apiKeys.weather){ if(!auto) setScanStatus("⚠ WeatherAPI key not configured."); return; }
+    try{
+      const zips=[...new Set([...roofers.flatMap(r=>r.territories),...(zipTerritories||[]).map(zt=>zt.zip_code)])];
+      let foundStorms=0, autoProcessed=0, cooldownSkipped=0;
+
+      for(const zip of zips.slice(0,10)){
+        const res=await fetch("/api/weather-scan",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({action:"scan_alerts",apiKey:apiKeys.weather,zip}),
+        });
+        const data=await res.json();
+        if(data.error){ console.warn("Scan error for ZIP",zip,data.error); continue; }
+
+        for(const storm of (data.storms||[])){
+          const isDup=storms.some(s=>s.zip===storm.zip&&s.type===storm.type&&s.date===storm.date);
+          if(isDup) continue;
+
+          // Add the storm
+          onUpdate("add_storm",{storm});
+          foundStorms++;
+
+          // Auto-process if enabled
+          if(scanSettings.autoProcess){
+            const result = await autoProcessStorm(storm);
+            if(result.success){
+              if(result.cooldown){
+                // Re-engaged existing leads during cooldown
+                autoProcessed += (result.reEngaged||0)+(result.followedUp||0);
+              } else {
+                autoProcessed += result.count||0;
+              }
             }
-          });
+            if(result.skipped==="cooldown") cooldownSkipped++;
+          }
         }
-        if(found>0) addActivity({type:"storm",message:`Auto-scan found ${found} new storm alert(s)`,badge:`${found} new`,badgeColor:C.red});
-        onScanSettingsChange({...scanSettings,lastScan:new Date().toLocaleString()});
-        if(!auto) setScanStatus("✓ Scan complete");
-      }catch(e){if(!auto) setScanStatus("Error: "+e.message);}
-    } else if(!auto) setScanStatus("⚠ WeatherAPI key not configured.");
-    if(!auto) setTimeout(()=>setScanStatus(""),3000);
-  },[roofers,apiKeys,scanSettings,onUpdate,onScanSettingsChange,addActivity]);
+      }
+
+      if(foundStorms>0||autoProcessed>0){
+        const msg = [
+          foundStorms>0&&`${foundStorms} new storm(s) detected`,
+          autoProcessed>0&&`${autoProcessed} leads auto-generated`,
+          cooldownSkipped>0&&`${cooldownSkipped} ZIP(s) skipped (cooldown)`,
+        ].filter(Boolean).join(" · ");
+        addActivity({type:"storm",message:msg,badge:foundStorms>0?`${foundStorms} storms`:"auto",badgeColor:C.red});
+      }
+
+      onScanSettingsChange({...scanSettings,lastScan:new Date().toLocaleString()});
+      if(!auto) setScanStatus(`✓ Scan complete — ${foundStorms} new storm(s)${autoProcessed>0?`, ${autoProcessed} leads auto-generated`:""}`);
+    }catch(e){
+      console.error("Scan error:",e);
+      if(!auto) setScanStatus("Error: "+e.message);
+    }
+    if(!auto) setTimeout(()=>setScanStatus(""),5000);
+  },[roofers,apiKeys,scanSettings,storms,zipTerritories,zipLeadPulls,onUpdate,onScanSettingsChange,addActivity]);
 
   useEffect(()=>{
     if(scanSettings.interval==="manual") return;
@@ -3058,7 +3598,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
     {showAddRoofer&&<AddRooferModal onClose={()=>setShowAddRoofer(false)} onAdd={r=>{onUpdate("add_roofer",{roofer:r});addActivity({type:"roofer",message:`New roofer: ${r.name}`,badge:r.plan,badgeColor:PLAN_COLORS[r.plan]});}}/>}
     {editingRoofer&&<EditRooferModal roofer={editingRoofer} onClose={()=>setEditingRoofer(null)} onSave={r=>onUpdate("edit_roofer",{roofer:r})}/>}
     {editingLead&&<EditLeadModal lead={editingLead} roofers={roofers} onClose={()=>setEditingLead(null)} onSave={l=>onUpdate("edit_lead",{lead:l})}/>}
-    {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofers.find(r=>r.id===viewingConvo.rooferId)} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
+    {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofers.find(r=>r.id===viewingConvo.rooferId)} storms={storms} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
     <Tabs tabs={["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"]} active={tab} onChange={setTab}/>
@@ -3110,7 +3650,6 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
             const zip=manualZip.trim();
             const eligible=roofers.filter(r=>r.status==="active"&&(r.territories.includes(zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===zip)));
             if(eligible.length===0){ alert("No active roofer covers ZIP "+zip); setManualZip(""); return; }
-            // Assign to whichever eligible roofer currently has the fewest pending leads in this ZIP (fairness)
             const r=eligible.reduce((least,cur)=>{
               const curPending=leads.filter(l=>l.rooferId===cur.id&&l.zip===zip&&l.status==="pending").length;
               const leastPending=leads.filter(l=>l.rooferId===least.id&&l.zip===zip&&l.status==="pending").length;
@@ -3123,28 +3662,127 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           }}>+ Campaign</Btn>
         </div>
       </div>
-      <TableWrap headers={["Type","Location","ZIP","Severity","Date","Status","Action"]}>
+
+      {/* Storm detail panel */}
+      {selectedStorm&&<StormDetailPanel storm={selectedStorm} leads={leads} roofers={roofers} apiKeys={apiKeys} onClose={()=>setSelectedStorm(null)}/>}
+
+      {/* Storms table */}
+      <TableWrap headers={["Type","Details","Location","ZIP","Severity","Date","Status","Actions"]}>
         {storms.map(st=><TR key={st.id}>
           <TD bold>{st.type}</TD>
+          <TD>
+            <div style={{fontSize:12,color:C.text}}>{st.headline||st.type}</div>
+            {st.detail?.hailSize&&<div style={{fontSize:10,color:C.orange}}>◆ Hail: {st.detail.hailSize} {st.detail.hailDescription?`— ${st.detail.hailDescription}`:""}</div>}
+            {st.detail?.windSpeed&&<div style={{fontSize:10,color:C.blue}}>→ Wind: {st.detail.windSpeed} {st.detail.windDescription?`— ${st.detail.windDescription}`:""}</div>}
+            {st.detail?.efRating&&<div style={{fontSize:10,color:C.red}}>⚡ Rating: {st.detail.efRating}</div>}
+            {st.detail?.category&&<div style={{fontSize:10,color:C.red}}>🌀 {st.detail.category}</div>}
+            {st.source&&<div style={{fontSize:9,color:C.textMuted,marginTop:2}}>Source: {st.source}</div>}
+          </TD>
           <TD>{st.location}</TD>
           <TD>{st.zip}</TD>
           <TD><SeverityBadge severity={st.severity}/></TD>
           <TD dim>{st.date}</TD>
           <TD><Badge label={st.processed?"processed":"new"} color={st.processed?C.green:C.orange} small/></TD>
-          <TD>{!st.processed&&<Btn small variant="primary" onClick={()=>{
-            const eligible=roofers.filter(r=>r.status==="active"&&(r.territories.includes(st.zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===st.zip)));
-            if(eligible.length===0){ alert("No active roofers cover ZIP "+st.zip+"."); return; }
-            const leadCount=Math.max(1,Math.min(eligible.length*3,12)); // demo volume, scales with coverage
-            const assignments=distributeLeadsRoundRobin(eligible,leadCount);
-            assignments.forEach(a=>onUpdate("add_lead",{lead:{id:"l"+Date.now()+Math.random(),homeowner:a.homeowner,phone:a.phone,zip:st.zip,rooferId:a.rooferId,stormType:st.type,status:"pending",conversations:[],notes:"",contactedAt:null,followupSent:false}}));
-            onUpdate("process_storm",{stormId:st.id});
-            const perRoofer=eligible.map(r=>`${r.name}: ${assignments.filter(a=>a.rooferId===r.id).length}`).join(", ");
-            addActivity({type:"storm",message:`Storm ${st.location} processed — ${assignments.length} lead(s) split across ${eligible.length} roofer(s)`,badge:`${eligible.length} roofers`,badgeColor:C.orange});
-            alert(`Processed: ${assignments.length} leads distributed.\n${perRoofer}\n\nEach homeowner was assigned to exactly one roofer — no duplicate outreach.`);
-          }}>Process</Btn>}</TD>
+          <TD>
+            <div style={flex(6)}>
+              <Btn small variant="ghost" onClick={()=>setSelectedStorm(st)}>Report</Btn>
+              {!st.processed&&<Btn small variant="primary" onClick={async()=>{
+                const eligible=roofers.filter(r=>r.status==="active"&&(r.territories.includes(st.zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===st.zip)));
+                if(eligible.length===0){ alert("No active roofers cover ZIP "+st.zip+"."); return; }
+
+                const tracerfyKey = apiKeys.tracerfy;
+
+                if(tracerfyKey){
+                  // ── Real homeowner data via Tracerfy ──────────────────────
+                  setScanStatus(`Building lead list for ZIP ${st.zip}...`);
+                  const stormNote = "Storm: "+(st.headline||st.type)+(st.detail?.hailSize?" | Hail: "+st.detail.hailSize:"")+(st.detail?.windSpeed?" | Wind: "+st.detail.windSpeed:"");
+
+                  const result = await buildLeadsForZip(st.zip, tracerfyKey, msg=>setScanStatus(msg));
+
+                  if(result.error){
+                    setScanStatus("⚠ "+result.error);
+                    setTimeout(()=>setScanStatus(""),6000);
+                    return;
+                  }
+
+                  if(!result.leads.length){
+                    alert("No homeowner contacts found for ZIP "+st.zip+". The ZIP may not be in Tracerfy's database.");
+                    setScanStatus("");
+                    return;
+                  }
+
+                  // Distribute real leads round-robin across eligible roofers
+                  let rooferIdx=0;
+                  result.leads.forEach(lead=>{
+                    const r=eligible[rooferIdx%eligible.length];
+                    rooferIdx++;
+                    onUpdate("add_lead",{lead:{
+                      id:"l"+Date.now()+Math.random(),
+                      homeowner:lead.homeowner,
+                      phone:lead.phone,
+                      email:lead.email||"",
+                      address:lead.address,
+                      zip:st.zip,
+                      rooferId:r.id,
+                      stormType:st.type,
+                      status:"pending",
+                      conversations:[],
+                      notes:stormNote,
+                      contactedAt:null,
+                      followupSent:false,
+                    }});
+                  });
+
+                  onUpdate("process_storm",{stormId:st.id});
+                  const perRoofer=eligible.map(r=>`${r.name}: ${result.leads.filter((_,i)=>i%eligible.length===eligible.indexOf(r)).length}`).join(", ");
+                  addActivity({type:"storm",message:`Storm ${st.location} processed — ${result.leads.length} real homeowner leads`,badge:`${result.leads.length} leads`,badgeColor:C.green});
+                  setScanStatus(`✓ ${result.leads.length} real homeowner leads created for ZIP ${st.zip}`);
+                  setTimeout(()=>setScanStatus(""),5000);
+                  alert(`✓ ${result.leads.length} real homeowner leads distributed.\n\n${perRoofer}\n\nEach lead has the owner's name and phone number from Tracerfy.`);
+
+                } else {
+                  // ── Fallback: demo data (no Tracerfy key configured) ──────
+                  const leadCount=Math.max(1,Math.min(eligible.length*3,12));
+                  const assignments=distributeLeadsRoundRobin(eligible,leadCount);
+                  assignments.forEach(a=>onUpdate("add_lead",{lead:{id:"l"+Date.now()+Math.random(),homeowner:a.homeowner,phone:a.phone,zip:st.zip,rooferId:a.rooferId,stormType:st.type,status:"pending",conversations:[],notes:"Storm: "+(st.headline||st.type)+(st.detail?.hailSize?" | Hail: "+st.detail.hailSize:"")+(st.detail?.windSpeed?" | Wind: "+st.detail.windSpeed:""),contactedAt:null,followupSent:false}}));
+                  onUpdate("process_storm",{stormId:st.id});
+                  addActivity({type:"storm",message:`Storm ${st.location} processed — ${assignments.length} demo leads (add Tracerfy key for real data)`,badge:`${eligible.length} roofers`,badgeColor:C.orange});
+                  alert(`Processed with demo data: ${assignments.length} leads.\n\nTo get real homeowner names & numbers, add your Tracerfy API key in API Settings.`);
+                }
+              }}>Process</Btn>}
+            </div>
+          </TD>
         </TR>)}
       </TableWrap>
       <StormMap storms={storms} roofers={roofers}/>
+
+      {/* ZIP Cooldown Status */}
+      {(zipLeadPulls||[]).length>0&&<div style={card()}>
+        <div style={{...T.head(13,600),marginBottom:4}}>ZIP Code Cooldown Status</div>
+        <div style={{fontSize:12,color:C.textSub,marginBottom:12}}>
+          ZIPs on cooldown won't be auto-processed until the period expires · {scanSettings.cooldownMonths||3}-month cooldown
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {(zipLeadPulls||[]).map(pull=>{
+            const daysLeft=cooldownRemainingDays(pull.zip_code);
+            const onCd=zipOnCooldown(pull.zip_code);
+            return(
+              <div key={pull.zip_code} style={{display:"flex",alignItems:"center",gap:12,
+                padding:"9px 14px",background:C.surface,borderRadius:8,
+                border:`1px solid ${onCd?C.red+"33":C.green+"33"}`}}>
+                <div style={{width:8,height:8,borderRadius:"50%",flexShrink:0,background:onCd?C.red:C.green}}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>ZIP {pull.zip_code}</div>
+                  <div style={{fontSize:11,color:C.textSub}}>
+                    Last pulled {new Date(pull.last_pulled_at).toLocaleDateString()} · {pull.lead_count||0} leads · {pull.storm_type||""}
+                  </div>
+                </div>
+                <Badge label={onCd?`${daysLeft}d left`:"Ready"} color={onCd?C.red:C.green} small/>
+              </div>
+            );
+          })}
+        </div>
+      </div>}
     </div>}
 
     {tab==="Roofers"&&<div>
@@ -4065,10 +4703,10 @@ function Subscriptions({roofers,seats,zipTerritories,onUpdate}){
 
 // ─── API SETTINGS ─────────────────────────────────────────────────────────────
 function APISettings({apiKeys,onUpdate}){
-  const[keys,setKeys]=useState({weather:apiKeys.weather||"",twilioSid:apiKeys.twilio?.sid||"",twilioToken:apiKeys.twilio?.token||"",twilioPhone:apiKeys.twilio?.from||"",googleCalClientId:apiKeys.googleCal?.clientId||"",googleCalClientSecret:apiKeys.googleCal?.clientSecret||"",googleCalRefreshToken:apiKeys.googleCal?.refreshToken||"",attom:apiKeys.attom||"",stripePublishable:apiKeys.stripe?.publishable||"",stripeSecret:apiKeys.stripe?.secret||""});
+  const[keys,setKeys]=useState({weather:apiKeys.weather||"",twilioSid:apiKeys.twilio?.sid||"",twilioToken:apiKeys.twilio?.token||"",twilioPhone:apiKeys.twilio?.from||"",googleCalClientId:apiKeys.googleCal?.clientId||"",googleCalClientSecret:apiKeys.googleCal?.clientSecret||"",googleCalRefreshToken:apiKeys.googleCal?.refreshToken||"",tracerfy:apiKeys.tracerfy||"",stripePublishable:apiKeys.stripe?.publishable||"",stripeSecret:apiKeys.stripe?.secret||""});
   const[testResults,setTestResults]=useState({});
 
-  function save(){onUpdate("api_keys",{weather:keys.weather,twilio:keys.twilioSid?{sid:keys.twilioSid,token:keys.twilioToken,from:keys.twilioPhone}:null,googleCal:keys.googleCalClientId?{clientId:keys.googleCalClientId,clientSecret:keys.googleCalClientSecret,refreshToken:keys.googleCalRefreshToken}:null,attom:keys.attom,stripe:keys.stripeSecret?{publishable:keys.stripePublishable,secret:keys.stripeSecret}:null});alert("API keys saved!");}
+  function save(){onUpdate("api_keys",{weather:keys.weather,twilio:keys.twilioSid?{sid:keys.twilioSid,token:keys.twilioToken,from:keys.twilioPhone}:null,googleCal:keys.googleCalClientId?{clientId:keys.googleCalClientId,clientSecret:keys.googleCalClientSecret,refreshToken:keys.googleCalRefreshToken}:null,tracerfy:keys.tracerfy,stripe:keys.stripeSecret?{publishable:keys.stripePublishable,secret:keys.stripeSecret}:null});alert("API keys saved!");}
 
   async function testService(name){
     setTestResults(p=>({...p,[name]:"Testing..."}));
@@ -4076,7 +4714,7 @@ function APISettings({apiKeys,onUpdate}){
       if(name==="weather"&&keys.weather){const r=await fetch(`https://api.weatherapi.com/v1/current.json?key=${keys.weather}&q=75023`);const d=await r.json();setTestResults(p=>({...p,[name]:d.error?"❌ "+d.error.message:"✓ Connected — "+d.location?.name}));}
       else if(name==="googleCal"&&keys.googleCalClientId){const t=await getGCalAccessToken({clientId:keys.googleCalClientId,clientSecret:keys.googleCalClientSecret,refreshToken:keys.googleCalRefreshToken});setTestResults(p=>({...p,[name]:t?"✓ Token refreshed successfully":"❌ Failed"}));}
       else if(name==="twilio"&&keys.twilioSid){const r=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${keys.twilioSid}.json`,{headers:{"Authorization":"Basic "+btoa(keys.twilioSid+":"+keys.twilioToken)}});const d=await r.json();setTestResults(p=>({...p,[name]:d.friendly_name?"✓ "+d.friendly_name:"❌ "+(d.message||"Invalid credentials")}));}
-      else if(name==="attom"&&keys.attom){const r=await fetch("https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/basicprofile?postalcode=75023&pagesize=1",{headers:{"apikey":keys.attom,"Accept":"application/json"}});const d=await r.json();setTestResults(p=>({...p,[name]:d.property?"✓ Connected":"❌ "+(d.status?.msg||"Invalid key")}));}
+      else if(name==="tracerfy"&&keys.tracerfy){const r=await fetch("/api/lead-builder",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"get_addresses",zip:"75023"})});const d=await r.json();setTestResults(p=>({...p,[name]:d.success?"✓ Connected — "+d.count+" test addresses found":"❌ "+(d.error||"Check API key")}));}
       else if(name==="stripe"&&keys.stripeSecret){const r=await fetch("https://api.stripe.com/v1/balance",{headers:{"Authorization":"Bearer "+keys.stripeSecret}});const d=await r.json();setTestResults(p=>({...p,[name]:d.object==="balance"?"✓ Connected":"❌ "+(d.error?.message||"Invalid key")}));}
       else if(name==="claude"){const r=await callClaude([{role:"user",content:"Reply with exactly: SkyShield connected"}]);setTestResults(p=>({...p,[name]:"✓ "+r.trim().slice(0,40)}));}
       else setTestResults(p=>({...p,[name]:"⚠ Enter key above and try again"}));
@@ -4087,11 +4725,11 @@ function APISettings({apiKeys,onUpdate}){
     {id:"weather",name:"WeatherAPI.com",desc:"Storm alert scanning",link:"https://www.weatherapi.com/",fields:[{k:"weather",label:"API Key"}]},
     {id:"twilio",name:"Twilio SMS",desc:"Account credentials (shared) + default fallback number",link:"https://www.twilio.com/",fields:[{k:"twilioSid",label:"Account SID"},{k:"twilioToken",label:"Auth Token",pw:true},{k:"twilioPhone",label:"Default From Number (fallback)"}]},
     {id:"googleCal",name:"Google Calendar",desc:"Inspection scheduling sync",link:"https://console.cloud.google.com/",fields:[{k:"googleCalClientId",label:"Client ID"},{k:"googleCalClientSecret",label:"Client Secret",pw:true},{k:"googleCalRefreshToken",label:"Refresh Token",pw:true}]},
-    {id:"attom",name:"ATTOM Property Data",desc:"Property data enrichment",link:"https://www.attomdata.com/",fields:[{k:"attom",label:"API Key"}]},
+    {id:"tracerfy",name:"Tracerfy Skip Trace",desc:"Homeowner name, phone & email lookup — $0.04/lead",link:"https://www.tracerfy.com/",fields:[{k:"tracerfy",label:"API Key (Bearer Token)"}]},
     {id:"stripe",name:"Stripe",desc:"Subscription billing",link:"https://dashboard.stripe.com/",fields:[{k:"stripePublishable",label:"Publishable Key"},{k:"stripeSecret",label:"Restricted Key",pw:true}]},
     {id:"claude",name:"Claude AI (Built-in)",desc:"Powers AI Agent & SMS generation",link:"https://console.anthropic.com/",fields:[]},
   ];
-  const configured=id=>{if(id==="twilio")return !!keys.twilioSid;if(id==="googleCal")return !!keys.googleCalClientId&&!!keys.googleCalRefreshToken;if(id==="stripe")return !!keys.stripeSecret;if(id==="claude")return true;return !!keys[id];};
+  const configured=id=>{if(id==="twilio")return !!keys.twilioSid;if(id==="googleCal")return !!keys.googleCalClientId&&!!keys.googleCalRefreshToken;if(id==="stripe")return !!keys.stripeSecret;if(id==="claude")return true;if(id==="tracerfy")return !!keys.tracerfy;return !!keys[id];};
 
   return <div>
     <div style={{...flex(0,"center","space-between"),marginBottom:20}}>
@@ -4127,11 +4765,14 @@ export default function App(){
   const[roofers,setRoofers]=useState([]);
   const[seats,setSeats]=useState([]);
   const[zipTerritories,setZipTerritories]=useState([]);
+  const[zipLeadPulls,setZipLeadPulls]=useState([]);
   const[leads,setLeads]=useState([]);
   const[storms,setStorms]=useState([]);
   const[apiKeys,setApiKeys]=useState({});
   const[activeSection,setActiveSection]=useState("Command Center");
   const[selectedRoofer,setSelectedRoofer]=useState(null);
+  const[mobileNavOpen,setMobileNavOpen]=useState(false);
+  const isMobile=useIsMobile();
   const[scanSettings,setScanSettings]=useState({interval:"daily",startTime:"07:00",lastScan:null});
   const[activities,setActivities]=useState([{type:"system",message:"SkyShield Pro initialized and ready.",ts:new Date().toLocaleString(),badge:"ready",badgeColor:C.green}]);
   const[auth,setAuth]=useState({loggedIn:false,role:null,roofer:null,session:null});
@@ -4189,6 +4830,7 @@ export default function App(){
         setApiKeys(data.apiKeys);
         setSeats(data.seats||[]);
         setZipTerritories(data.zipTerritories||[]);
+        setZipLeadPulls(data.zipLeadPulls||[]);
         // Show "What's New" if the user hasn't seen this version yet
         if((data.lastSeenVersion||"0.0.0")!==APP_VERSION) setShowWhatsNew(true);
         setDataLoaded(true);
@@ -4380,6 +5022,7 @@ export default function App(){
       case "edit_roofer":setRoofers(p=>p.map(r=>r.id===payload.roofer.id?{...r,...payload.roofer}:r));setSelectedRoofer(p=>p&&p.id===payload.roofer.id?{...p,...payload.roofer}:p);break;
       case "delete_lead":setLeads(p=>p.filter(l=>l.id!==payload.leadId));break;
       case "edit_lead":setLeads(p=>p.map(l=>l.id===payload.lead.id?{...l,...payload.lead}:l));break;
+      case "update_lead":setLeads(p=>p.map(l=>l.id===payload.lead.id?{...l,...payload.lead}:l));break;
       default:break;
     }
   }
@@ -4477,17 +5120,28 @@ export default function App(){
           if(result.paymentLink) window.open(result.paymentLink,"_blank");
         }}>Upgrade Now</Btn>
       </div>}
-      <nav style={{position:"sticky",top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 20px"}}>
+      <nav style={{position:"sticky",top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 16px"}}>
         <div style={{maxWidth:1300,margin:"0 auto",...flex(0,"center","space-between"),height:54}}>
           <div style={flex(10)}>
-            <div style={{width:30,height:30,borderRadius:8,background:`linear-gradient(135deg,#0d9488,#0284c7)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>⛈</div>
-            <div><div style={T.head(14,700)}>Sky<span style={{color:C.orange}}>Shield</span> Pro</div><div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.08em"}}>Ark Dynamics</div></div>
+            <div style={{width:30,height:30,borderRadius:8,background:`linear-gradient(135deg,#0d9488,#0284c7)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>⛈</div>
+            {!isMobile&&<div><div style={T.head(14,700)}>Sky<span style={{color:C.orange}}>Shield</span> Pro</div><div style={{fontSize:9,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.08em"}}>Ark Dynamics</div></div>}
           </div>
-          <div style={flex(10)}><span style={{fontSize:13,color:C.textSub,fontWeight:500}}>{live.name}</span><Badge label={live.plan} color={PLAN_COLORS[live.plan]} small/><NotificationBell roofer={live} onMarkRead={()=>handleUpdate("mark_notifications_read",{rooferId:live.id})}/><Btn small variant="ghost" onClick={handleSignOut}>Sign Out</Btn></div>
+          <div style={flex(10)}>
+            <span style={{fontSize:13,color:C.textSub,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:120}}>{live.name}</span>
+            {!isMobile&&<Badge label={live.plan} color={PLAN_COLORS[live.plan]} small/>}
+            <NotificationBell roofer={live} onMarkRead={()=>handleUpdate("mark_notifications_read",{rooferId:live.id})}/>
+            <Btn small variant="ghost" onClick={handleSignOut}>Sign Out</Btn>
+          </div>
         </div>
       </nav>
-      <main style={{maxWidth:1300,margin:"0 auto",padding:"24px 20px"}}>
-        <div style={{marginBottom:20}}><div style={T.head(22,700)}>{live.name}</div><div style={{...flex(8),marginTop:8}}><Badge label={live.plan} color={PLAN_COLORS[live.plan]}/><StatusBadge status={live.status}/></div></div>
+      <main style={{maxWidth:1300,margin:"0 auto",padding:isMobile?"12px 10px":"24px 20px"}}>
+        <div style={{marginBottom:16}}>
+          <div style={T.head(isMobile?18:22,700)}>{live.name}</div>
+          <div style={{...flex(8),marginTop:6,flexWrap:"wrap"}}>
+            <Badge label={live.plan} color={PLAN_COLORS[live.plan]}/>
+            <StatusBadge status={live.status}/>
+          </div>
+        </div>
         <RooferDashboard roofer={live} leads={leads} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
       </main>
       <FloatingAIHelp role="roofer" roofer={live} leads={leads.filter(l=>l.rooferId===live.id)} storms={[]} currentSection="Roofer Dashboard"/>
@@ -4509,8 +5163,8 @@ export default function App(){
           </div>
         </div>
 
-        {/* Nav links */}
-        <div style={flex(2)}>
+        {/* Nav links — hidden on mobile, shown via hamburger */}
+        {!isMobile&&<div style={flex(2)}>
           {navSections.map(sec=><button key={sec} onClick={()=>{setActiveSection(sec);setSelectedRoofer(null);}} style={navStyle(activeSection===sec&&!selectedRoofer)}>{sec}</button>)}
           {selectedRoofer&&<div style={flex(6)}>
             <span style={{color:C.textMuted,fontSize:12}}>›</span>
@@ -4518,20 +5172,27 @@ export default function App(){
             <span style={{color:C.textMuted,fontSize:12}}>›</span>
             <span style={{fontSize:13,color:C.orange,fontWeight:600}}>{selectedRoofer.name}</span>
           </div>}
-        </div>
+        </div>}
 
         {/* Status + sign out */}
         <div style={flex(12)}>
-          {dataLoadError&&<Badge label="⚠ Sync error" color={C.red} small/>}
+          {!isMobile&&<>{dataLoadError&&<Badge label="⚠ Sync error" color={C.red} small/>}
           <div style={{...flex(5),fontSize:12,color:C.textMuted}}><span style={{color:C.green,fontSize:8}}>●</span>{roofers.filter(r=>r.status==="active").length} active</div>
           <div style={{...flex(5),fontSize:12,color:C.textMuted}}><span style={{color:C.orange,fontSize:8}}>●</span>{leads.filter(l=>l.status==="pending").length} pending</div>
-          {scanSettings.interval!=="manual"&&<div style={{...flex(5),fontSize:12,color:C.textMuted}}><span style={{color:C.blue,fontSize:8}}>●</span>auto-scan</div>}
-          <Btn small variant="ghost" onClick={handleSignOut}>Sign Out</Btn>
+          {scanSettings.interval!=="manual"&&<div style={{...flex(5),fontSize:12,color:C.textMuted}}><span style={{color:C.blue,fontSize:8}}>●</span>auto-scan</div>}</>}
+          {isMobile&&<button onClick={()=>setMobileNavOpen(o=>!o)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"6px 10px",color:C.text,cursor:"pointer",fontSize:18}}>☰</button>}
+          {!isMobile&&<Btn small variant="ghost" onClick={handleSignOut}>Sign Out</Btn>}
         </div>
       </div>
-    </nav>
 
-    <main style={{maxWidth:1300,margin:"0 auto",padding:"24px 20px"}}>
+      {/* Mobile dropdown nav */}
+      {isMobile&&mobileNavOpen&&<div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"8px 16px",display:"flex",flexDirection:"column",gap:4}}>
+        {navSections.map(sec=><button key={sec} onClick={()=>{setActiveSection(sec);setSelectedRoofer(null);setMobileNavOpen(false);}} style={{...navStyle(activeSection===sec&&!selectedRoofer),textAlign:"left",width:"100%",padding:"10px 12px",borderRadius:8}}>{sec}</button>)}
+        <button onClick={handleSignOut} style={{padding:"10px 12px",background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:13,textAlign:"left"}}>Sign Out</button>
+      </div>}
+
+    </nav>
+    <main style={{maxWidth:1300,margin:"0 auto",padding:isMobile?"12px 10px":"24px 20px"}}>
       <div style={{marginBottom:22}}>
         <div style={T.head(22,700)}>{selectedRoofer?selectedRoofer.name:activeSection}</div>
         {selectedRoofer&&<div style={{...flex(8),marginTop:8}}>
@@ -4544,7 +5205,7 @@ export default function App(){
       {selectedRoofer
         ?<RooferDashboard roofer={roofers.find(r=>r.id===selectedRoofer.id)||selectedRoofer} leads={leads} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
         :activeSection==="Command Center"
-          ?<CommandCenter roofers={roofers} leads={leads} storms={storms} apiKeys={apiKeys} onUpdate={handleUpdate} onSelectRoofer={selectRoofer} scanSettings={scanSettings} onScanSettingsChange={setScanSettings} activities={activities} addActivity={addActivity} zipTerritories={zipTerritories}/>
+          ?<CommandCenter roofers={roofers} leads={leads} storms={storms} apiKeys={apiKeys} onUpdate={handleUpdate} onSelectRoofer={selectRoofer} scanSettings={scanSettings} onScanSettingsChange={setScanSettings} activities={activities} addActivity={addActivity} zipTerritories={zipTerritories} zipLeadPulls={zipLeadPulls} setZipLeadPulls={setZipLeadPulls}/>
           :activeSection==="Subscriptions & Billing"
             ?<Subscriptions roofers={roofers} seats={seats} zipTerritories={zipTerritories} onUpdate={handleUpdate}/>
             :<APISettings apiKeys={apiKeys} onUpdate={handleUpdate}/>
