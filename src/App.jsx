@@ -2069,41 +2069,48 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
       {/* ── NAV ── */}
       <nav style={{position:"sticky",top:0,zIndex:100,
         background:"rgba(3,14,24,0.9)",backdropFilter:"blur(20px)",
-        borderBottom:`1px solid ${C.border}`,padding:"0 24px"}}>
-        <div style={{maxWidth:1100,margin:"0 auto",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{width:32,height:32,borderRadius:9,background:"linear-gradient(135deg,#0d9488,#0284c7)",
-              display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,
-              boxShadow:"0 4px 14px rgba(13,148,136,0.4)"}}>⛈</div>
-            <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:16,fontWeight:700,letterSpacing:"-0.02em",color:"#fff"}}>
+        borderBottom:`1px solid ${C.border}`,padding:"0 16px"}}>
+        <div style={{maxWidth:1100,margin:"0 auto",height:56,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          {/* Logo */}
+          <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+            <div style={{width:30,height:30,borderRadius:8,background:"linear-gradient(135deg,#0d9488,#0284c7)",
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,
+              boxShadow:"0 4px 14px rgba(13,148,136,0.4)",flexShrink:0}}>⛈</div>
+            <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:15,fontWeight:700,letterSpacing:"-0.02em",color:"#fff",whiteSpace:"nowrap"}}>
               Sky<span style={{color:C.orange}}>Shield</span> Pro
             </div>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:28}}>
+
+          {/* Nav links — desktop only */}
+          {!isMobile&&<div style={{display:"flex",alignItems:"center",gap:24}}>
             {["Features","Pricing","Contact"].map(l=>(
               <a key={l} href={`#${l.toLowerCase()}`}
                 style={{fontSize:13,fontWeight:500,color:C.textSub,textDecoration:"none",cursor:"pointer"}}>
                 {l}
               </a>
             ))}
-          </div>
-          <div style={{display:"flex",gap:10}}>
-            <button onClick={onSignIn} style={{fontSize:13,fontWeight:600,padding:"8px 18px",borderRadius:8,
-              background:"transparent",color:C.textSub,border:`1px solid ${C.border}`,cursor:"pointer"}}>
+          </div>}
+
+          {/* CTA buttons */}
+          <div style={{display:"flex",gap:8,flexShrink:0}}>
+            <button onClick={onSignIn} style={{fontSize:13,fontWeight:600,
+              padding:isMobile?"7px 14px":"8px 18px",borderRadius:8,
+              background:"transparent",color:C.textSub,border:`1px solid ${C.border}`,cursor:"pointer",
+              whiteSpace:"nowrap"}}>
               Sign In
             </button>
-            <button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
+            {!isMobile&&<button onClick={()=>document.getElementById("contact").scrollIntoView({behavior:"smooth"})}
               style={{fontSize:13,fontWeight:600,padding:"8px 18px",borderRadius:8,
               background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",border:"none",cursor:"pointer",
-              boxShadow:"0 4px 14px rgba(13,148,136,0.35)"}}>
+              boxShadow:"0 4px 14px rgba(13,148,136,0.35)",whiteSpace:"nowrap"}}>
               Start Free Trial
-            </button>
+            </button>}
           </div>
         </div>
       </nav>
 
       {/* ── HERO ── */}
-      <section style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:"80px 24px 60px",textAlign:"center"}}>
+      <section style={{position:"relative",zIndex:1,maxWidth:1100,margin:"0 auto",padding:isMobile?"40px 16px 40px":"80px 24px 60px",textAlign:"center"}}>
         <div style={{display:"inline-flex",alignItems:"center",gap:8,
           background:`${C.orange}14`,border:`1px solid ${C.orange}33`,
           borderRadius:30,padding:"5px 14px",marginBottom:24,
