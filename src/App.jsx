@@ -330,6 +330,8 @@ const FontLoader = () => (
     input, select, textarea, button { font-family: 'Inter', sans-serif; }
     table { border-collapse: collapse; }
     a { text-decoration: none; }
+    /* Hide scrollbar on horizontal scroll containers */
+    .tab-scroll::-webkit-scrollbar { display: none; }
     /* Mobile table scroll */
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     /* Mobile nav hide */
@@ -697,8 +699,30 @@ function StatCard({label,value,sub,color=C.orange,icon}){
   </div>;
 }
 function Tabs({tabs,active,onChange}){
-  return <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,marginBottom:20,overflowX:"auto",gap:0}}>
-    {tabs.map(t=><button key={t} onClick={()=>onChange(t)} style={{background:"none",border:"none",cursor:"pointer",padding:"10px 14px",fontSize:13,fontWeight:active===t?600:400,color:active===t?C.orange:C.textMuted,borderBottom:active===t?`2px solid ${C.orange}`:"2px solid transparent",marginBottom:-1,whiteSpace:"nowrap"}}>{t}</button>)}
+  return <div style={{
+    display:"flex",
+    borderBottom:`1px solid ${C.border}`,
+    marginBottom:20,
+    overflowX:"auto",
+    WebkitOverflowScrolling:"touch",
+    scrollbarWidth:"none", // hide scrollbar on Firefox
+    msOverflowStyle:"none", // hide on IE
+    gap:0,
+    // Fade edges to hint scrollability
+    WebkitMaskImage:"linear-gradient(to right, black 85%, transparent 100%)",
+    maskImage:"linear-gradient(to right, black 85%, transparent 100%)",
+  }}>
+    {tabs.map(t=><button key={t} onClick={()=>onChange(t)} style={{
+      background:"none",border:"none",cursor:"pointer",
+      padding:"10px 16px",
+      fontSize:13,fontWeight:active===t?600:400,
+      color:active===t?C.orange:C.textMuted,
+      borderBottom:active===t?`2px solid ${C.orange}`:"2px solid transparent",
+      marginBottom:-1,whiteSpace:"nowrap",
+      flexShrink:0, // prevent tabs from compressing
+    }}>{t}</button>)}
+    {/* Spacer so last tab isn't under fade */}
+    <div style={{minWidth:24,flexShrink:0}}/>
   </div>;
 }
 function Modal({title,onClose,children,wide}){
@@ -2469,7 +2493,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
             </div>
             <div style={{fontSize:13,color:C.textSub}}>Expand your capabilities beyond your base plan</div>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:12}}>
+          <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat(2,1fr)",gap:12}}>
             {LANDING_ADDONS.map(a=>(
               <div key={a.label} style={{background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,
                 borderRadius:12,padding:18,display:"flex",gap:14,alignItems:"flex-start"}}>
