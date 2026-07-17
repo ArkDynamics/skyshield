@@ -216,6 +216,94 @@ async function billingCall(endpoint, body){
 }
 
 
+// ─── JOB SHAPE CONVERTERS ─────────────────────────────────────────────────────
+function jobToRow(j){
+  return {
+    id:j.id, lead_id:j.leadId||null, roofer_id:j.rooferId, account_id:j.accountId,
+    homeowner:j.homeowner, phone:j.phone||"", email:j.email||"",
+    address:j.address||"", zip:j.zip||"",
+    stage:j.stage||"Lead", storm_type:j.stormType||"",
+    claim_number:j.claimNumber||"", adjuster_name:j.adjusterName||"",
+    adjuster_phone:j.adjusterPhone||"", insurance_company:j.insuranceCompany||"",
+    claim_status:j.claimStatus||"none",
+    mortgage_company:j.mortgageCompany||"",
+    notes:j.notes||"", photos:j.photos||[],
+    tasks:j.tasks||[], estimate_id:j.estimateId||null,
+    invoice_id:j.invoiceId||null,
+    actual_cost:j.actualCost||0,
+    updated_at:new Date().toISOString(), created_at:j.createdAt||new Date().toISOString(),
+  };
+}
+function rowToJob(row){
+  return {
+    id:row.id, leadId:row.lead_id, rooferId:row.roofer_id, accountId:row.account_id,
+    homeowner:row.homeowner, phone:row.phone||"", email:row.email||"",
+    address:row.address||"", zip:row.zip||"",
+    stage:row.stage||"Lead", stormType:row.storm_type||"",
+    claimNumber:row.claim_number||"", adjusterName:row.adjuster_name||"",
+    adjusterPhone:row.adjuster_phone||"", insuranceCompany:row.insurance_company||"",
+    claimStatus:row.claim_status||"none",
+    mortgageCompany:row.mortgage_company||"",
+    notes:row.notes||"", photos:row.photos||[],
+    tasks:row.tasks||[], estimateId:row.estimate_id||null,
+    invoiceId:row.invoice_id||null,
+    actualCost:row.actual_cost||0,
+    createdAt:row.created_at||new Date().toISOString(),
+  };
+}
+
+function estimateToRow(e){
+  return {
+    id:e.id, job_id:e.jobId, roofer_id:e.rooferId,
+    line_items:e.lineItems||[], subtotal:e.subtotal||0,
+    tax_rate:e.taxRate||0, tax_amount:e.taxAmount||0,
+    discount:e.discount||0, total:e.total||0,
+    status:e.status||"draft", notes:e.notes||"",
+    sent_at:e.sentAt||null, signed_at:e.signedAt||null,
+    signature:e.signature||null,
+    updated_at:new Date().toISOString(), created_at:e.createdAt||new Date().toISOString(),
+  };
+}
+function rowToEstimate(row){
+  return {
+    id:row.id, jobId:row.job_id, rooferId:row.roofer_id,
+    lineItems:row.line_items||[], subtotal:row.subtotal||0,
+    taxRate:row.tax_rate||0, taxAmount:row.tax_amount||0,
+    discount:row.discount||0, total:row.total||0,
+    status:row.status||"draft", notes:row.notes||"",
+    sentAt:row.sent_at||null, signedAt:row.signed_at||null,
+    signature:row.signature||null,
+    createdAt:row.created_at||new Date().toISOString(),
+  };
+}
+
+function invoiceToRow(inv){
+  return {
+    id:inv.id, job_id:inv.jobId, roofer_id:inv.rooferId,
+    estimate_id:inv.estimateId||null,
+    line_items:inv.lineItems||[], subtotal:inv.subtotal||0,
+    tax_amount:inv.taxAmount||0, total:inv.total||0,
+    amount_paid:inv.amountPaid||0, balance_due:inv.balanceDue||0,
+    status:inv.status||"unpaid", notes:inv.notes||"",
+    due_date:inv.dueDate||null, paid_at:inv.paidAt||null,
+    payments:inv.payments||[],
+    updated_at:new Date().toISOString(), created_at:inv.createdAt||new Date().toISOString(),
+  };
+}
+function rowToInvoice(row){
+  return {
+    id:row.id, jobId:row.job_id, rooferId:row.roofer_id,
+    estimateId:row.estimate_id||null,
+    lineItems:row.line_items||[], subtotal:row.subtotal||0,
+    taxAmount:row.tax_amount||0, total:row.total||0,
+    amountPaid:row.amount_paid||0, balanceDue:row.balance_due||0,
+    status:row.status||"unpaid", notes:row.notes||"",
+    dueDate:row.due_date||null, paidAt:row.paid_at||null,
+    payments:row.payments||[],
+    createdAt:row.created_at||new Date().toISOString(),
+  };
+}
+
 function leadToRow(l){
   return {
     id:l.id, homeowner:l.homeowner, phone:l.phone, address:l.address||"", zip:l.zip, roofer_id:l.rooferId,
@@ -264,7 +352,7 @@ function rowToStorm(row){
 
 async function loadAllData(){
   const token=getCurrentAccessToken();
-  const [rooferRows, leadRows, stormRows, appStateRows, seatRows, zipRows, pullRows] = await Promise.all([
+  const [rooferRows, leadRows, stormRows, appStateRows, seatRows, zipRows, pullRows, jobRows, estimateRows, invoiceRows] = await Promise.all([
     supabaseQuery("roofers", token, "?select=*"),
     supabaseQuery("leads", token, "?select=*"),
     supabaseQuery("storms", token, "?select=*"),
@@ -272,6 +360,9 @@ async function loadAllData(){
     supabaseQuery("seats", token, "?select=*"),
     supabaseQuery("zip_territories", token, "?select=*"),
     supabaseQuery("zip_lead_pulls", token, "?select=*"),
+    supabaseQuery("jobs", token, "?select=*"),
+    supabaseQuery("estimates", token, "?select=*"),
+    supabaseQuery("invoices", token, "?select=*"),
   ]);
   const appState = Array.isArray(appStateRows) && appStateRows[0] ? appStateRows[0] : null;
   return {
@@ -285,6 +376,9 @@ async function loadAllData(){
     seats: Array.isArray(seatRows) ? seatRows.map(r=>({id:r.id,account_id:r.account_id,email:r.email,name:r.name||"",role:r.role,status:r.status,permissionOverrides:r.permission_overrides||{}})) : [],
     zipTerritories: Array.isArray(zipRows) ? zipRows : [],
     zipLeadPulls: Array.isArray(pullRows) ? pullRows : [],
+    jobs: Array.isArray(jobRows) ? jobRows.map(rowToJob) : [],
+    estimates: Array.isArray(estimateRows) ? estimateRows.map(rowToEstimate) : [],
+    invoices: Array.isArray(invoiceRows) ? invoiceRows.map(rowToInvoice) : [],
   };
 }
 
@@ -440,11 +534,13 @@ const CHANGELOG = [
   },
 ];
 
-const PLAN_PRICES   = { Starter:1500, Pro:2000, Growth:2750 };
-const PLAN_PRICES_ANNUAL = { Starter:14997, Pro:19997, Growth:27497 };
-const PLAN_COLORS   = { Starter:C.blue, Pro:C.orange, Growth:C.purple, Trial:C.yellow };
-const PLAN_ZIP_LIMITS = { Starter:10, Pro:20, Growth:30 };
-const PLAN_SEAT_LIMITS = { Starter:1, Pro:1, Growth:3 };
+const PLAN_PRICES   = { Base:275, Pro:2000, Growth:2750 };
+const PLAN_PRICES_ANNUAL = { Base:2750, Pro:19997, Growth:27497 };
+const PLAN_COLORS   = { Base:C.blue, Pro:C.orange, Growth:C.purple, Trial:C.yellow };
+const PLAN_ZIP_LIMITS = { Base:0, Pro:20, Growth:30 };
+const PLAN_SEAT_LIMITS = { Base:1, Pro:1, Growth:3 };
+// Lead gen is only available on Pro and Growth
+const PLAN_HAS_LEAD_GEN = { Base:false, Pro:true, Growth:true };
 const SETUP_FEE = 500;
 
 const SEAT_ROLES = ["Owner","Office Manager","Sales Rep","Inspector"];
@@ -2873,7 +2969,7 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
 }
 
 // ─── ROOFER DASHBOARD ─────────────────────────────────────────────────────────
-function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
+function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,addActivity}){
   const isMobile=useIsMobile();
   const[tab,setTab]=useState("Overview");
   const[showAddInspector,setShowAddInspector]=useState(false);
@@ -2956,7 +3052,16 @@ function RooferDashboard({roofer,leads,apiKeys,onUpdate,addActivity}){
     {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofer} storms={[]} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
-    <Tabs tabs={["Overview","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={setTab}/>
+    <Tabs tabs={["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={setTab}/>
+
+    {tab==="Jobs"&&<JobPipeline
+      jobs={(jobs||[]).filter(j=>j.rooferId===roofer.id)}
+      estimates={estimates||[]}
+      invoices={invoices||[]}
+      roofers={[roofer]}
+      leads={leads}
+      onUpdate={onUpdate}
+    />}
 
     {tab==="Overview"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12}}>
@@ -3695,6 +3800,29 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
     </div>}
 
     {tab==="Storms"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {/* Lead gen gate — only Pro and Growth have access */}
+      {roofers.length>0&&!PLAN_HAS_LEAD_GEN[roofers[0]?.plan]&&<div style={{
+        background:`linear-gradient(135deg,${C.orange}12,${C.purple}08)`,
+        border:`1px solid ${C.orange}44`,borderRadius:14,padding:28,textAlign:"center",
+      }}>
+        <div style={{fontSize:28,marginBottom:12}}>⚡</div>
+        <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:700,color:C.text,marginBottom:8}}>
+          Storm Lead Generation — Pro & Growth Only
+        </div>
+        <div style={{fontSize:13,color:C.textSub,lineHeight:1.7,maxWidth:480,margin:"0 auto 20px"}}>
+          Your current plan ({roofers[0]?.plan||"Base"} · $275/mo) includes the full CRM. Upgrade to Pro ($2,000/mo) or Growth ($2,750/mo) to unlock:
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:360,margin:"0 auto 24px",textAlign:"left"}}>
+          {["Automatic storm detection across your ZIP territories","Tracerfy homeowner data — real names & phone numbers","Auto-process storms and distribute leads to roofers","Smart cooldown re-engagement for repeat storms","AI-powered SMS outreach to homeowners"].map(f=>(
+            <div key={f} style={{display:"flex",gap:10,fontSize:13,color:C.textSub}}>
+              <span style={{color:C.orange,flexShrink:0}}>✓</span>{f}
+            </div>
+          ))}
+        </div>
+        <Btn variant="primary" onClick={()=>document.getElementById("contact")?.scrollIntoView({behavior:"smooth"})}>
+          Upgrade to Pro — $2,000/mo
+        </Btn>
+      </div>}
       <ScanScheduler scanSettings={scanSettings} onChange={onScanSettingsChange}/>
       <div style={{...flex(0,"center","space-between"),flexWrap:"wrap",gap:8}}>
         <div style={flex(8)}>
@@ -4467,6 +4595,720 @@ function ZipMapView({myZips, allZipData, onClaim}){
   );
 }
 
+// ─── JOB PIPELINE STAGES ─────────────────────────────────────────────────────
+const JOB_STAGES = ["Lead","Inspection Scheduled","Estimate Sent","Contract Signed","Material Ordered","Job Scheduled","In Progress","Complete","Invoice Sent","Paid"];
+const JOB_STAGE_COLORS = {
+  "Lead":C.textMuted,"Inspection Scheduled":C.blue,"Estimate Sent":C.orange,
+  "Contract Signed":C.purple,"Material Ordered":C.yellow,"Job Scheduled":C.blue,
+  "In Progress":C.orange,"Complete":C.green,"Invoice Sent":C.yellow,"Paid":C.green,
+};
+
+const CLAIM_STATUSES = ["none","filed","adjuster scheduled","approved","supplement filed","supplement approved","payment received","denied"];
+const LINE_ITEM_TYPES = ["Labor","Material","Permit","Disposal","Other"];
+
+// ── ESTIMATE BUILDER ──────────────────────────────────────────────────────────
+function EstimateBuilder({job, estimate, onSave, onClose}){
+  const[items,setItems]=useState(estimate?.lineItems||[{id:"li1",type:"Labor",description:"",qty:1,unit:"sq",unitPrice:0,total:0}]);
+  const[taxRate,setTaxRate]=useState(estimate?.taxRate||0);
+  const[discount,setDiscount]=useState(estimate?.discount||0);
+  const[notes,setNotes]=useState(estimate?.notes||"");
+  const[status,setStatus]=useState(estimate?.status||"draft");
+
+  function updateItem(idx,field,val){
+    setItems(p=>p.map((item,i)=>{
+      if(i!==idx) return item;
+      const updated={...item,[field]:val};
+      if(field==="qty"||field==="unitPrice") updated.total=Number(updated.qty||0)*Number(updated.unitPrice||0);
+      return updated;
+    }));
+  }
+  function addItem(){ setItems(p=>[...p,{id:"li"+Date.now(),type:"Labor",description:"",qty:1,unit:"sq",unitPrice:0,total:0}]); }
+  function removeItem(idx){ setItems(p=>p.filter((_,i)=>i!==idx)); }
+
+  const subtotal=items.reduce((s,i)=>s+Number(i.total||0),0);
+  const taxAmt=subtotal*(Number(taxRate)||0)/100;
+  const total=subtotal+taxAmt-Number(discount||0);
+
+  function save(){
+    const est={
+      id:estimate?.id||"est_"+Date.now(),
+      jobId:job.id, rooferId:job.rooferId,
+      lineItems:items, subtotal, taxRate:Number(taxRate), taxAmount:taxAmt,
+      discount:Number(discount), total, status, notes,
+      createdAt:estimate?.createdAt||new Date().toISOString(),
+    };
+    onSave(est);
+  }
+
+  return(
+    <Modal title={`${estimate?"Edit":"Create"} Estimate — ${job.homeowner}`} onClose={onClose} wide>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        {/* Line items */}
+        <div>
+          <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>Line Items</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {items.map((item,i)=>(
+              <div key={item.id} style={{display:"grid",gridTemplateColumns:"120px 1fr 60px 80px 80px 80px 28px",gap:6,alignItems:"center"}}>
+                <select value={item.type} onChange={e=>updateItem(i,"type",e.target.value)}
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",color:C.text,fontSize:12}}>
+                  {LINE_ITEM_TYPES.map(t=><option key={t}>{t}</option>)}
+                </select>
+                <input value={item.description} onChange={e=>updateItem(i,"description",e.target.value)}
+                  placeholder="Description" style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",color:C.text,fontSize:12}}/>
+                <input type="number" value={item.qty} onChange={e=>updateItem(i,"qty",e.target.value)}
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",color:C.text,fontSize:12,textAlign:"right"}}/>
+                <select value={item.unit} onChange={e=>updateItem(i,"unit",e.target.value)}
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",color:C.text,fontSize:12}}>
+                  {["sq","lf","ea","hr","lot"].map(u=><option key={u}>{u}</option>)}
+                </select>
+                <input type="number" value={item.unitPrice} onChange={e=>updateItem(i,"unitPrice",e.target.value)}
+                  placeholder="$/unit" style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",color:C.text,fontSize:12,textAlign:"right"}}/>
+                <div style={{fontSize:12,fontWeight:600,color:C.green,textAlign:"right",padding:"0 4px"}}>
+                  ${Number(item.total||0).toFixed(2)}
+                </div>
+                <button onClick={()=>removeItem(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:16,padding:0,lineHeight:1}}>✕</button>
+              </div>
+            ))}
+            <Btn small onClick={addItem}>+ Add Line Item</Btn>
+          </div>
+        </div>
+
+        {/* Totals */}
+        <div style={{background:C.surface,borderRadius:10,padding:14,border:`1px solid ${C.border}`}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6}}>
+            <span style={{fontSize:13,color:C.textSub}}>Subtotal</span>
+            <span style={{fontSize:13,fontWeight:600,color:C.text,textAlign:"right"}}>${subtotal.toLocaleString("en",{minimumFractionDigits:2})}</span>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:13,color:C.textSub}}>Tax</span>
+              <input type="number" value={taxRate} onChange={e=>setTaxRate(e.target.value)}
+                style={{width:52,background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 6px",color:C.text,fontSize:12,textAlign:"right"}}/>
+              <span style={{fontSize:12,color:C.textMuted}}>%</span>
+            </div>
+            <span style={{fontSize:13,color:C.textSub,textAlign:"right"}}>${taxAmt.toFixed(2)}</span>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:13,color:C.textSub}}>Discount</span>
+              <span style={{fontSize:12,color:C.textMuted}}>$</span>
+              <input type="number" value={discount} onChange={e=>setDiscount(e.target.value)}
+                style={{width:70,background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 6px",color:C.text,fontSize:12}}/>
+            </div>
+            <span style={{fontSize:13,color:C.red,textAlign:"right"}}>-${Number(discount||0).toFixed(2)}</span>
+            <span style={{fontSize:15,fontWeight:700,color:C.text}}>Total</span>
+            <span style={{fontSize:15,fontWeight:700,color:C.green,textAlign:"right"}}>${total.toLocaleString("en",{minimumFractionDigits:2})}</span>
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Select label="Status" value={status} onChange={setStatus} options={["draft","sent","approved","declined"]}/>
+          <Textarea label="Internal Notes" value={notes} onChange={setNotes} rows={2}/>
+        </div>
+
+        {/* AI Proposal Generator */}
+        <ProposalGenerator job={job} lineItems={items} total={total} subtotal={subtotal} taxAmt={taxAmt} discount={discount}/>
+
+        <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
+          <Btn onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" onClick={save}>{estimate?"Save Changes":"Create Estimate"}</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── AI PROPOSAL GENERATOR ─────────────────────────────────────────────────────
+function ProposalGenerator({job, lineItems, total, subtotal, taxAmt, discount}){
+  const[proposal,setProposal]=useState("");
+  const[generating,setGenerating]=useState(false);
+  const[companyName,setCompanyName]=useState("");
+  const[warranty,setWarranty]=useState("10-year workmanship warranty");
+  const[additionalContext,setAdditionalContext]=useState("");
+  const[copied,setCopied]=useState(false);
+  const[expanded,setExpanded]=useState(false);
+
+  async function generate(){
+    setGenerating(true);
+    setExpanded(true);
+    const lineItemsText=lineItems.filter(i=>i.description||i.type).map(i=>`- ${i.description||i.type}: ${i.qty} ${i.unit} @ $${i.unitPrice} = $${Number(i.total||0).toFixed(2)}`).join("\n");
+    const sys=`You are a professional proposal writer for roofing companies. Write clear, professional, persuasive roofing proposals that build trust with homeowners. Be specific about the work being done. Do not use generic filler text. Format with clear sections using simple headers (no markdown symbols like # or **). Keep it professional but warm.`;
+    const prompt=`Write a professional roofing proposal with the following details:
+
+COMPANY: ${companyName||"[Company Name]"}
+HOMEOWNER: ${job.homeowner}
+PROPERTY ADDRESS: ${job.address||"[Address]"}, ${job.zip}
+STORM TYPE: ${job.stormType||"storm damage"}
+${job.claimNumber?`INSURANCE CLAIM #: ${job.claimNumber}`:""}
+${job.insuranceCompany?`INSURANCE COMPANY: ${job.insuranceCompany}`:""}
+
+SCOPE OF WORK:
+${lineItemsText||"Full roof replacement"}
+
+PRICING:
+Subtotal: $${subtotal.toFixed(2)}
+${taxAmt>0?`Tax: $${taxAmt.toFixed(2)}`:""}
+${discount>0?`Discount: -$${Number(discount).toFixed(2)}`:""}
+Total: $${total.toFixed(2)}
+
+WARRANTY: ${warranty}
+${additionalContext?`ADDITIONAL CONTEXT: ${additionalContext}`:""}
+
+Write a complete proposal including:
+1. Header with company name, date, and homeowner info
+2. Introduction paragraph acknowledging the storm damage
+3. Scope of Work section with clear description of all work
+4. Materials section describing quality of materials to be used
+5. Pricing breakdown
+6. Warranty section
+7. Why choose us (brief, 2-3 sentences)
+8. Next steps / call to action
+9. Signature line
+
+Make it professional, specific, and convincing. Use the actual line item details to describe the work.`;
+
+    try{
+      const text=await callClaude([{role:"user",content:prompt}],sys,1500);
+      setProposal(text);
+    }catch(e){
+      setProposal("Error generating proposal. Check your API connection and try again.");
+    }
+    setGenerating(false);
+  }
+
+  function copyToClipboard(){
+    navigator.clipboard.writeText(proposal).then(()=>{
+      setCopied(true);
+      setTimeout(()=>setCopied(false),2000);
+    });
+  }
+
+  return(
+    <div style={{background:`${C.orange}08`,border:`1px solid ${C.orange}22`,borderRadius:10,padding:14}}>
+      <div style={{...flex(0,"center","space-between"),marginBottom:expanded?12:0,cursor:"pointer"}} onClick={()=>setExpanded(e=>!e)}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:14,color:C.orange}}>✦</span>
+          <span style={{fontSize:13,fontWeight:600,color:C.text}}>AI Proposal Generator</span>
+          <Badge label="Claude" color={C.orange} small/>
+        </div>
+        <span style={{fontSize:12,color:C.textMuted}}>{expanded?"▲":"▼ Generate a professional proposal"}</span>
+      </div>
+
+      {expanded&&<div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <Input label="Your Company Name" value={companyName} onChange={setCompanyName} placeholder="Apex Roofing Co"/>
+          <Input label="Warranty to Offer" value={warranty} onChange={setWarranty} placeholder="10-year workmanship warranty"/>
+        </div>
+        <Textarea label="Additional Context (optional)" value={additionalContext} onChange={setAdditionalContext}
+          placeholder="e.g. Ice & Water shield on all valleys, synthetic underlayment, specific shingle brand..." rows={2}/>
+
+        <Btn variant="primary" onClick={generate} disabled={generating}>
+          {generating?"✦ Generating Proposal...":"✦ Generate AI Proposal"}
+        </Btn>
+
+        {proposal&&<div>
+          <div style={{...flex(0,"center","space-between"),marginBottom:6}}>
+            <span style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em"}}>Generated Proposal</span>
+            <div style={flex(6)}>
+              <Btn small variant="ghost" onClick={copyToClipboard}>{copied?"✓ Copied!":"Copy"}</Btn>
+              <Btn small variant="ghost" onClick={generate} disabled={generating}>Regenerate</Btn>
+            </div>
+          </div>
+          <textarea value={proposal} onChange={e=>setProposal(e.target.value)}
+            style={{
+              width:"100%",minHeight:320,
+              background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,padding:"12px 14px",
+              color:C.text,fontSize:12,lineHeight:1.7,
+              fontFamily:"'Inter',sans-serif",outline:"none",resize:"vertical",
+            }}/>
+          <div style={{fontSize:11,color:C.textMuted,marginTop:4}}>
+            You can edit the proposal above before copying. Changes won't affect the estimate.
+          </div>
+        </div>}
+      </div>}
+    </div>
+  );
+}
+
+// ── INVOICE GENERATOR ─────────────────────────────────────────────────────────
+function InvoiceModal({job, estimate, invoice, onSave, onClose}){
+  const[items,setItems]=useState(invoice?.lineItems||estimate?.lineItems||[]);
+  const[notes,setNotes]=useState(invoice?.notes||"");
+  const[dueDate,setDueDate]=useState(invoice?.dueDate||"");
+  const[payments,setPayments]=useState(invoice?.payments||[]);
+  const[addingPayment,setAddingPayment]=useState(false);
+  const[payAmt,setPayAmt]=useState("");
+  const[payNote,setPayNote]=useState("");
+
+  const subtotal=items.reduce((s,i)=>s+Number(i.total||0),0);
+  const taxAmt=estimate?.taxAmount||invoice?.taxAmount||0;
+  const total=subtotal+taxAmt-(estimate?.discount||0);
+  const amountPaid=payments.reduce((s,p)=>s+Number(p.amount||0),0);
+  const balanceDue=total-amountPaid;
+  const status=balanceDue<=0?"paid":amountPaid>0?"partial":"unpaid";
+
+  function addPayment(){
+    if(!payAmt||isNaN(payAmt)) return;
+    setPayments(p=>[...p,{id:"pay_"+Date.now(),amount:Number(payAmt),note:payNote,date:new Date().toLocaleDateString()}]);
+    setPayAmt(""); setPayNote(""); setAddingPayment(false);
+  }
+
+  function save(){
+    onSave({
+      id:invoice?.id||"inv_"+Date.now(),
+      jobId:job.id, rooferId:job.rooferId,
+      estimateId:estimate?.id||null,
+      lineItems:items, subtotal, taxAmount:taxAmt,
+      total, amountPaid, balanceDue, status,
+      notes, dueDate, payments,
+      createdAt:invoice?.createdAt||new Date().toISOString(),
+    });
+  }
+
+  const statusColor=s=>s==="paid"?C.green:s==="partial"?C.yellow:C.red;
+
+  return(
+    <Modal title={`Invoice — ${job.homeowner}`} onClose={onClose} wide>
+      <div style={{display:"flex",flexDirection:"column",gap:14}}>
+        {/* Summary */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+          {[{l:"Total",v:`$${total.toLocaleString("en",{minimumFractionDigits:2})}`,c:C.text},
+            {l:"Amount Paid",v:`$${amountPaid.toLocaleString("en",{minimumFractionDigits:2})}`,c:C.green},
+            {l:"Balance Due",v:`$${balanceDue.toLocaleString("en",{minimumFractionDigits:2})}`,c:balanceDue>0?C.red:C.green},
+            {l:"Status",v:status.toUpperCase(),c:statusColor(status)},
+          ].map(s=>(
+            <div key={s.l} style={{background:C.surface,borderRadius:8,padding:"10px 12px",border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",marginBottom:4}}>{s.l}</div>
+              <div style={{fontSize:16,fontWeight:700,color:s.c}}>{s.v}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Line items (read-only from estimate) */}
+        <div style={{background:C.surface,borderRadius:10,padding:14,border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.textSub,marginBottom:8}}>Line Items</div>
+          {items.map((item,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",
+              borderBottom:i<items.length-1?`1px solid ${C.border}`:"none"}}>
+              <span style={{fontSize:12,color:C.textSub}}>{item.description||item.type} ({item.qty} {item.unit} @ ${item.unitPrice})</span>
+              <span style={{fontSize:12,fontWeight:600,color:C.text}}>${Number(item.total||0).toFixed(2)}</span>
+            </div>
+          ))}
+          {taxAmt>0&&<div style={{display:"flex",justifyContent:"space-between",padding:"5px 0"}}>
+            <span style={{fontSize:12,color:C.textSub}}>Tax</span>
+            <span style={{fontSize:12,color:C.text}}>${taxAmt.toFixed(2)}</span>
+          </div>}
+        </div>
+
+        {/* Payments */}
+        <div>
+          <div style={{...flex(0,"center","space-between"),marginBottom:8}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase"}}>Payment History</div>
+            {balanceDue>0&&<Btn small variant="success" onClick={()=>setAddingPayment(true)}>+ Record Payment</Btn>}
+          </div>
+          {payments.length===0&&<div style={{fontSize:12,color:C.textMuted,fontStyle:"italic"}}>No payments recorded yet.</div>}
+          {payments.map((p,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",
+              borderBottom:`1px solid ${C.border}`}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:C.green,flexShrink:0}}/>
+              <div style={{flex:1}}>
+                <span style={{fontSize:13,fontWeight:600,color:C.green}}>${Number(p.amount).toLocaleString("en",{minimumFractionDigits:2})}</span>
+                {p.note&&<span style={{fontSize:12,color:C.textSub,marginLeft:8}}>{p.note}</span>}
+              </div>
+              <span style={{fontSize:11,color:C.textMuted}}>{p.date}</span>
+            </div>
+          ))}
+          {addingPayment&&<div style={{display:"flex",gap:8,marginTop:8,alignItems:"center"}}>
+            <input type="number" value={payAmt} onChange={e=>setPayAmt(e.target.value)}
+              placeholder="Amount" style={{width:100,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",color:C.text,fontSize:13}}/>
+            <input value={payNote} onChange={e=>setPayNote(e.target.value)}
+              placeholder="Note (check #, cash, etc)" style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",color:C.text,fontSize:13}}/>
+            <Btn small variant="success" onClick={addPayment}>Add</Btn>
+            <Btn small onClick={()=>setAddingPayment(false)}>Cancel</Btn>
+          </div>}
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Input label="Due Date" type="date" value={dueDate} onChange={setDueDate}/>
+          <Textarea label="Notes" value={notes} onChange={setNotes} rows={2}/>
+        </div>
+
+        <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
+          <Btn onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" onClick={save}>Save Invoice</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── JOB CARD ──────────────────────────────────────────────────────────────────
+function JobCard({job, estimates, invoices, roofers, onUpdate, onOpenEstimate, onOpenInvoice}){
+  const[expanded,setExpanded]=useState(false);
+  const[editingInsurance,setEditingInsurance]=useState(false);
+  const[ins,setIns]=useState({
+    claimNumber:job.claimNumber||"", adjusterName:job.adjusterName||"",
+    adjusterPhone:job.adjusterPhone||"", insuranceCompany:job.insuranceCompany||"",
+    claimStatus:job.claimStatus||"none", mortgageCompany:job.mortgageCompany||"",
+  });
+  const[addingTask,setAddingTask]=useState(false);
+  const[taskText,setTaskText]=useState("");
+
+  const estimate=estimates.find(e=>e.jobId===job.id);
+  const invoice=invoices.find(i=>i.jobId===job.id);
+  const roofer=roofers.find(r=>r.id===job.rooferId);
+  const stageColor=JOB_STAGE_COLORS[job.stage]||C.textMuted;
+
+  function saveInsurance(){
+    onUpdate("update_job",{job:{...job,...ins}});
+    setEditingInsurance(false);
+  }
+
+  function addTask(){
+    if(!taskText.trim()) return;
+    const tasks=[...(job.tasks||[]),{id:"t"+Date.now(),text:taskText.trim(),done:false,createdAt:new Date().toLocaleDateString()}];
+    onUpdate("update_job",{job:{...job,tasks}});
+    setTaskText(""); setAddingTask(false);
+  }
+
+  function toggleTask(tid){
+    const tasks=(job.tasks||[]).map(t=>t.id===tid?{...t,done:!t.done}:t);
+    onUpdate("update_job",{job:{...job,tasks}});
+  }
+
+  return(
+    <div style={{...card({padding:0}),overflow:"hidden",border:`1px solid ${stageColor}22`}}>
+      {/* Header */}
+      <div style={{padding:"12px 16px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}
+        onClick={()=>setExpanded(e=>!e)}>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{fontSize:14,fontWeight:700,color:C.text}}>{job.homeowner}</span>
+            <Badge label={job.stage} color={stageColor} small/>
+            {job.claimNumber&&<Badge label={`Claim: ${job.claimNumber}`} color={C.blue} small/>}
+            {invoice&&<Badge label={invoice.status} color={invoice.status==="paid"?C.green:invoice.status==="partial"?C.yellow:C.red} small/>}
+          </div>
+          <div style={{fontSize:11,color:C.textSub,marginTop:3}}>
+            {job.address&&`${job.address} · `}{job.phone}{roofer&&` · ${roofer.name}`}
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+          {estimate&&<span style={{fontSize:12,fontWeight:600,color:C.green}}>${estimate.total.toLocaleString()}</span>}
+          <span style={{color:C.textMuted,fontSize:12}}>{expanded?"▲":"▼"}</span>
+        </div>
+      </div>
+
+      {expanded&&<div style={{padding:"0 16px 16px",borderTop:`1px solid ${C.border}`,paddingTop:14,
+        display:"flex",flexDirection:"column",gap:14}}>
+
+        {/* Stage selector */}
+        <div>
+          <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",marginBottom:6}}>Pipeline Stage</div>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+            {JOB_STAGES.map(s=>(
+              <button key={s} onClick={()=>onUpdate("update_job",{job:{...job,stage:s}})}
+                style={{fontSize:11,fontWeight:500,padding:"4px 10px",borderRadius:6,
+                  background:job.stage===s?`${JOB_STAGE_COLORS[s]}22`:"transparent",
+                  color:job.stage===s?JOB_STAGE_COLORS[s]:C.textMuted,
+                  border:`1px solid ${job.stage===s?JOB_STAGE_COLORS[s]+"44":C.border}`,
+                  cursor:"pointer"}}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Insurance claim */}
+        <div style={{background:C.surface,borderRadius:8,padding:12,border:`1px solid ${C.border}`}}>
+          <div style={{...flex(0,"center","space-between"),marginBottom:editingInsurance?10:0}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase"}}>Insurance Claim</div>
+            <Btn small variant="ghost" onClick={()=>{if(editingInsurance)saveInsurance();else setEditingInsurance(true);}}>
+              {editingInsurance?"Save":"Edit"}
+            </Btn>
+          </div>
+          {editingInsurance
+            ?<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <Input label="Claim #" value={ins.claimNumber} onChange={v=>setIns(p=>({...p,claimNumber:v}))}/>
+                <Select label="Claim Status" value={ins.claimStatus} onChange={v=>setIns(p=>({...p,claimStatus:v}))} options={CLAIM_STATUSES}/>
+                <Input label="Insurance Company" value={ins.insuranceCompany} onChange={v=>setIns(p=>({...p,insuranceCompany:v}))}/>
+                <Input label="Adjuster Name" value={ins.adjusterName} onChange={v=>setIns(p=>({...p,adjusterName:v}))}/>
+                <Input label="Adjuster Phone" value={ins.adjusterPhone} onChange={v=>setIns(p=>({...p,adjusterPhone:v}))}/>
+                <Input label="Mortgage Company" value={ins.mortgageCompany} onChange={v=>setIns(p=>({...p,mortgageCompany:v}))}/>
+              </div>
+            :<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
+                {[
+                  {l:"Claim #",v:job.claimNumber},
+                  {l:"Status",v:job.claimStatus!=="none"?job.claimStatus:"—"},
+                  {l:"Insurance Co",v:job.insuranceCompany},
+                  {l:"Adjuster",v:job.adjusterName},
+                  {l:"Adjuster Phone",v:job.adjusterPhone},
+                  {l:"Mortgage Co",v:job.mortgageCompany},
+                ].map(r=>(
+                  <div key={r.l}>
+                    <div style={{fontSize:10,color:C.textMuted}}>{r.l}</div>
+                    <div style={{fontSize:12,color:r.v&&r.v!=="—"?C.text:C.textMuted}}>{r.v||"—"}</div>
+                  </div>
+                ))}
+              </div>
+          }
+        </div>
+
+        {/* Photos */}
+        <div>
+          <div style={{...flex(0,"center","space-between"),marginBottom:8}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase"}}>
+              Photos ({(job.photos||[]).length})
+            </div>
+            <label style={{cursor:"pointer"}}>
+              <Btn small variant="ghost" onClick={()=>{}}>+ Add Photo</Btn>
+              <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={async e=>{
+                const files=Array.from(e.target.files);
+                const newPhotos=await Promise.all(files.map(f=>new Promise(res=>{
+                  const reader=new FileReader();
+                  reader.onload=ev=>res({id:"ph"+Date.now()+Math.random(),url:ev.target.result,name:f.name,uploadedAt:new Date().toLocaleDateString(),category:"damage"});
+                  reader.readAsDataURL(f);
+                })));
+                onUpdate("update_job",{job:{...job,photos:[...(job.photos||[]),...newPhotos]}});
+              }}/>
+            </label>
+          </div>
+          {(job.photos||[]).length===0
+            ?<div style={{fontSize:12,color:C.textMuted,fontStyle:"italic"}}>No photos yet — add photos from the inspection.</div>
+            :<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {(job.photos||[]).map(ph=>(
+                <div key={ph.id} style={{position:"relative"}}>
+                  <img src={ph.url} alt={ph.name} style={{width:72,height:72,objectFit:"cover",borderRadius:8,border:`1px solid ${C.border}`}}/>
+                  <button onClick={()=>onUpdate("update_job",{job:{...job,photos:(job.photos||[]).filter(p=>p.id!==ph.id)}})}
+                    style={{position:"absolute",top:-6,right:-6,width:18,height:18,borderRadius:"50%",
+                      background:C.red,border:"none",cursor:"pointer",color:"#fff",fontSize:10,lineHeight:"18px",textAlign:"center"}}>✕</button>
+                </div>
+              ))}
+            </div>
+          }
+        </div>
+
+        {/* Tasks */}
+        <div>
+          <div style={{...flex(0,"center","space-between"),marginBottom:8}}>
+            <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase"}}>Tasks</div>
+            <Btn small variant="ghost" onClick={()=>setAddingTask(true)}>+ Add Task</Btn>
+          </div>
+          {(job.tasks||[]).map(t=>(
+            <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",
+              borderBottom:`1px solid ${C.border}`}}>
+              <button onClick={()=>toggleTask(t.id)} style={{
+                width:18,height:18,borderRadius:4,border:`1px solid ${t.done?C.green:C.border}`,
+                background:t.done?C.green:"transparent",cursor:"pointer",flexShrink:0,
+                display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:10,
+              }}>{t.done?"✓":""}</button>
+              <span style={{fontSize:12,color:t.done?C.textMuted:C.text,textDecoration:t.done?"line-through":"none",flex:1}}>{t.text}</span>
+              <span style={{fontSize:10,color:C.textMuted}}>{t.createdAt}</span>
+            </div>
+          ))}
+          {addingTask&&<div style={{display:"flex",gap:6,marginTop:6}}>
+            <input value={taskText} onChange={e=>setTaskText(e.target.value)}
+              placeholder="Task description..." onKeyDown={e=>e.key==="Enter"&&addTask()}
+              style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 8px",color:C.text,fontSize:13,outline:"none"}}/>
+            <Btn small variant="primary" onClick={addTask}>Add</Btn>
+            <Btn small onClick={()=>setAddingTask(false)}>Cancel</Btn>
+          </div>}
+        </div>
+
+        {/* Job costing */}
+        {estimate&&<div style={{background:C.surface,borderRadius:8,padding:12,border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",marginBottom:8}}>Job Costing</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            <div>
+              <div style={{fontSize:10,color:C.textMuted}}>Estimated Revenue</div>
+              <div style={{fontSize:15,fontWeight:700,color:C.green}}>${estimate.total.toLocaleString()}</div>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:C.textMuted}}>Actual Cost</div>
+              <input type="number" value={job.actualCost||""} placeholder="0"
+                onChange={e=>onUpdate("update_job",{job:{...job,actualCost:Number(e.target.value)}})}
+                style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"4px 6px",color:C.text,fontSize:13,width:"100%",outline:"none"}}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:C.textMuted}}>Gross Margin</div>
+              <div style={{fontSize:15,fontWeight:700,color:estimate.total-(job.actualCost||0)>0?C.green:C.red}}>
+                ${(estimate.total-(job.actualCost||0)).toLocaleString()}
+                {estimate.total>0&&<span style={{fontSize:11,color:C.textSub,marginLeft:4}}>
+                  ({Math.round(((estimate.total-(job.actualCost||0))/estimate.total)*100)}%)
+                </span>}
+              </div>
+            </div>
+          </div>
+        </div>}
+
+        {/* Notes */}
+        <Textarea label="Job Notes" value={job.notes||""} onChange={v=>onUpdate("update_job",{job:{...job,notes:v}})} rows={2}/>
+
+        {/* Actions */}
+        <div style={flex(8,"center","flex-end")}>
+          {!estimate
+            ?<Btn small variant="primary" onClick={()=>onOpenEstimate(job,null)}>Create Estimate</Btn>
+            :<Btn small variant="ghost" onClick={()=>onOpenEstimate(job,estimate)}>Edit Estimate</Btn>
+          }
+          {estimate&&!invoice&&<Btn small variant="success" onClick={()=>onOpenInvoice(job,estimate,null)}>Generate Invoice</Btn>}
+          {invoice&&<Btn small variant="info" onClick={()=>onOpenInvoice(job,estimate,invoice)}>View Invoice</Btn>}
+          <Btn small variant="danger" onClick={()=>{if(window.confirm("Delete this job?"))onUpdate("delete_job",{jobId:job.id});}}>Delete</Btn>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+// ── JOB PIPELINE BOARD ───────────────────────────────────────────────────────
+function JobPipeline({jobs, estimates, invoices, roofers, leads, onUpdate}){
+  const[showAdd,setShowAdd]=useState(false);
+  const[filter,setFilter]=useState("all");
+  const[editingEstimate,setEditingEstimate]=useState(null); // {job, estimate}
+  const[editingInvoice,setEditingInvoice]=useState(null);   // {job, estimate, invoice}
+  const[f,setF]=useState({homeowner:"",phone:"",address:"",zip:"",rooferId:roofers[0]?.id||"",stormType:"",notes:""});
+  const u=k=>v=>setF(p=>({...p,[k]:v}));
+
+  const filteredJobs = filter==="all" ? jobs : jobs.filter(j=>j.stage===filter);
+
+  // Outstanding invoices summary
+  const outstanding = invoices.filter(i=>i.status!=="paid");
+  const outstandingTotal = outstanding.reduce((s,i)=>s+(i.balanceDue||0),0);
+  const paidThisMonth = invoices.filter(i=>i.status==="paid"&&i.paidAt&&new Date(i.paidAt).getMonth()===new Date().getMonth()).reduce((s,i)=>s+(i.total||0),0);
+
+  function addJob(){
+    if(!f.homeowner.trim()){ alert("Enter homeowner name."); return; }
+    const job={
+      id:"job_"+Date.now(), leadId:null, rooferId:f.rooferId,
+      accountId:"admin",
+      homeowner:f.homeowner.trim(), phone:f.phone.trim(),
+      address:f.address.trim(), zip:f.zip.trim(),
+      stormType:f.stormType, notes:f.notes.trim(),
+      stage:"Lead", claimNumber:"", adjusterName:"",
+      adjusterPhone:"", insuranceCompany:"", claimStatus:"none",
+      mortgageCompany:"", photos:[], tasks:[], actualCost:0,
+    };
+    onUpdate("add_job",{job});
+    setShowAdd(false);
+    setF({homeowner:"",phone:"",address:"",zip:"",rooferId:roofers[0]?.id||"",stormType:"",notes:""});
+  }
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {/* Summary cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10}}>
+        {[
+          {l:"Total Jobs",v:jobs.length,c:C.blue},
+          {l:"In Progress",v:jobs.filter(j=>["In Progress","Job Scheduled"].includes(j.stage)).length,c:C.orange},
+          {l:"Outstanding",v:`$${outstandingTotal.toLocaleString()}`,c:C.red},
+          {l:"Paid This Month",v:`$${paidThisMonth.toLocaleString()}`,c:C.green},
+        ].map(s=>(
+          <div key={s.l} style={{...card(),padding:"12px 14px"}}>
+            <div style={{fontSize:9,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6,lineHeight:1.4}}>{s.l}</div>
+            <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:22,fontWeight:700,color:s.c}}>{s.v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Header */}
+      <div style={{...flex(0,"center","space-between"),flexWrap:"wrap",gap:8}}>
+        <select value={filter} onChange={e=>setFilter(e.target.value)}
+          style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 12px",color:C.text,fontSize:13,cursor:"pointer"}}>
+          <option value="all">All Stages</option>
+          {JOB_STAGES.map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+        <Btn variant="primary" onClick={()=>setShowAdd(true)}>+ Add Job</Btn>
+      </div>
+
+      {/* Add job modal */}
+      {showAdd&&<Modal title="Add Job" onClose={()=>setShowAdd(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <Input label="Homeowner Name" value={f.homeowner} onChange={u("homeowner")} placeholder="Robert Chen"/>
+          <Input label="Street Address" value={f.address} onChange={u("address")} placeholder="1204 Oak Ln"/>
+          <div style={grid("1fr 1fr",12)}>
+            <Input label="Phone" value={f.phone} onChange={u("phone")} placeholder="972-555-0101"/>
+            <Input label="ZIP" value={f.zip} onChange={u("zip")} placeholder="75023"/>
+          </div>
+          <div style={grid("1fr 1fr",12)}>
+            <Select label="Storm Type" value={f.stormType} onChange={u("stormType")} options={["","Hail","Wind","Tornado","Flood","Retail"]}/>
+            {roofers.length>0&&<Select label="Assign Roofer" value={f.rooferId} onChange={u("rooferId")} options={roofers.map(r=>({value:r.id,label:r.name}))}/>}
+          </div>
+          <Textarea label="Notes" value={f.notes} onChange={u("notes")} rows={2}/>
+          <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
+            <Btn onClick={()=>setShowAdd(false)}>Cancel</Btn>
+            <Btn variant="primary" onClick={addJob}>Add Job</Btn>
+          </div>
+        </div>
+      </Modal>}
+
+      {/* Estimate builder modal */}
+      {editingEstimate&&<EstimateBuilder
+        job={editingEstimate.job} estimate={editingEstimate.estimate}
+        onSave={est=>{
+          if(editingEstimate.estimate) onUpdate("update_estimate",{estimate:est});
+          else{ onUpdate("add_estimate",{estimate:est}); onUpdate("update_job",{job:{...editingEstimate.job,estimateId:est.id}}); }
+          setEditingEstimate(null);
+        }}
+        onClose={()=>setEditingEstimate(null)}
+      />}
+
+      {/* Invoice modal */}
+      {editingInvoice&&<InvoiceModal
+        job={editingInvoice.job} estimate={editingInvoice.estimate} invoice={editingInvoice.invoice}
+        onSave={inv=>{
+          if(editingInvoice.invoice) onUpdate("update_invoice",{invoice:inv});
+          else{ onUpdate("add_invoice",{invoice:inv}); onUpdate("update_job",{job:{...editingInvoice.job,invoiceId:inv.id}}); }
+          setEditingInvoice(null);
+        }}
+        onClose={()=>setEditingInvoice(null)}
+      />}
+
+      {/* Job cards */}
+      {filteredJobs.length===0
+        ?<div style={{...card(),textAlign:"center",color:C.textMuted,padding:40,fontSize:13}}>
+            No jobs yet. Add your first job to get started.
+          </div>
+        :<div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {filteredJobs.map(job=>(
+            <JobCard key={job.id}
+              job={job}
+              estimates={estimates}
+              invoices={invoices}
+              roofers={roofers}
+              onUpdate={onUpdate}
+              onOpenEstimate={(j,e)=>setEditingEstimate({job:j,estimate:e})}
+              onOpenInvoice={(j,e,i)=>setEditingInvoice({job:j,estimate:e,invoice:i})}
+            />
+          ))}
+        </div>
+      }
+
+      {/* Outstanding invoices */}
+      {outstanding.length>0&&<div style={card()}>
+        <div style={{...T.head(13,600),marginBottom:12}}>Outstanding Invoices</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {outstanding.map(inv=>{
+            const job=jobs.find(j=>j.id===inv.jobId);
+            return(
+              <div key={inv.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",
+                borderBottom:`1px solid ${C.border}`}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>{job?.homeowner||"Unknown"}</div>
+                  <div style={{fontSize:11,color:C.textSub}}>{job?.address||""}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:13,fontWeight:700,color:C.red}}>${(inv.balanceDue||0).toLocaleString()}</div>
+                  <Badge label={inv.status} color={inv.status==="partial"?C.yellow:C.red} small/>
+                </div>
+                {inv.dueDate&&<div style={{fontSize:11,color:C.textMuted,whiteSpace:"nowrap"}}>Due {inv.dueDate}</div>}
+              </div>
+            );
+          })}
+          <div style={{...flex(0,"center","space-between"),paddingTop:8}}>
+            <span style={{fontSize:12,fontWeight:600,color:C.textSub}}>Total Outstanding</span>
+            <span style={{fontSize:14,fontWeight:700,color:C.red}}>${outstandingTotal.toLocaleString()}</span>
+          </div>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
 function PricingEditor({pricing,setPricing,roofers}){
   const[editingPlan,setEditingPlan]=useState(null); // plan name being edited
   const[showAdd,setShowAdd]=useState(false);
@@ -4824,6 +5666,9 @@ export default function App(){
   const[seats,setSeats]=useState([]);
   const[zipTerritories,setZipTerritories]=useState([]);
   const[zipLeadPulls,setZipLeadPulls]=useState([]);
+  const[jobs,setJobs]=useState([]);
+  const[estimates,setEstimates]=useState([]);
+  const[invoices,setInvoices]=useState([]);
   const[leads,setLeads]=useState([]);
   const[storms,setStorms]=useState([]);
   const[apiKeys,setApiKeys]=useState({});
@@ -4889,6 +5734,9 @@ export default function App(){
         setSeats(data.seats||[]);
         setZipTerritories(data.zipTerritories||[]);
         setZipLeadPulls(data.zipLeadPulls||[]);
+        setJobs(data.jobs||[]);
+        setEstimates(data.estimates||[]);
+        setInvoices(data.invoices||[]);
         // Show "What's New" if the user hasn't seen this version yet
         if((data.lastSeenVersion||"0.0.0")!==APP_VERSION) setShowWhatsNew(true);
         setDataLoaded(true);
@@ -5081,6 +5929,16 @@ export default function App(){
       case "delete_lead":setLeads(p=>p.filter(l=>l.id!==payload.leadId));break;
       case "edit_lead":setLeads(p=>p.map(l=>l.id===payload.lead.id?{...l,...payload.lead}:l));break;
       case "update_lead":setLeads(p=>p.map(l=>l.id===payload.lead.id?{...l,...payload.lead}:l));break;
+      // Jobs
+      case "add_job":{ const j={...payload.job,createdAt:new Date().toISOString()}; setJobs(p=>[...p,j]); try{supabaseUpsert("jobs",getCurrentAccessToken(),jobToRow(j));}catch(e){console.warn(e);} break; }
+      case "update_job":{ setJobs(p=>p.map(j=>j.id===payload.job.id?{...j,...payload.job}:j)); try{supabaseUpsert("jobs",getCurrentAccessToken(),jobToRow({...jobs.find(j=>j.id===payload.job.id)||{},...payload.job}));}catch(e){console.warn(e);} break; }
+      case "delete_job":{ setJobs(p=>p.filter(j=>j.id!==payload.jobId)); try{supabaseDelete("jobs",getCurrentAccessToken(),"id",payload.jobId);}catch(e){console.warn(e);} break; }
+      // Estimates
+      case "add_estimate":{ setEstimates(p=>[...p,payload.estimate]); try{supabaseUpsert("estimates",getCurrentAccessToken(),estimateToRow(payload.estimate));}catch(e){console.warn(e);} break; }
+      case "update_estimate":{ setEstimates(p=>p.map(e=>e.id===payload.estimate.id?{...e,...payload.estimate}:e)); try{supabaseUpsert("estimates",getCurrentAccessToken(),estimateToRow({...estimates.find(e=>e.id===payload.estimate.id)||{},...payload.estimate}));}catch(e){console.warn(e);} break; }
+      // Invoices
+      case "add_invoice":{ setInvoices(p=>[...p,payload.invoice]); try{supabaseUpsert("invoices",getCurrentAccessToken(),invoiceToRow(payload.invoice));}catch(e){console.warn(e);} break; }
+      case "update_invoice":{ setInvoices(p=>p.map(i=>i.id===payload.invoice.id?{...i,...payload.invoice}:i)); try{supabaseUpsert("invoices",getCurrentAccessToken(),invoiceToRow({...invoices.find(i=>i.id===payload.invoice.id)||{},...payload.invoice}));}catch(e){console.warn(e);} break; }
       default:break;
     }
   }
@@ -5088,7 +5946,7 @@ export default function App(){
   function selectRoofer(roofer){setSelectedRoofer(roofer);setActiveSection("Roofer Dashboard");}
 
   // ── NAV CONFIG ────────────────────────────────────────────────────────────
-  const navSections=["Command Center","Subscriptions & Billing","API Settings"];
+  const navSections=["Jobs","Command Center","Subscriptions & Billing","API Settings"];
   const navStyle=(active)=>({border:"none",cursor:"pointer",padding:"6px 12px",borderRadius:6,fontSize:13,fontWeight:500,color:active?C.orange:C.textSub,background:active?C.orangeDim:"transparent"});
 
   // ── SHOW RESET PASSWORD SCREEN (from email link) ──────────────────────────
@@ -5200,7 +6058,7 @@ export default function App(){
             <StatusBadge status={live.status}/>
           </div>
         </div>
-        <RooferDashboard roofer={live} leads={leads} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
+        <RooferDashboard roofer={live} leads={leads} jobs={jobs} estimates={estimates} invoices={invoices} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
       </main>
       <FloatingAIHelp role="roofer" roofer={live} leads={leads.filter(l=>l.rooferId===live.id)} storms={[]} currentSection="Roofer Dashboard"/>
     </div>;
@@ -5261,12 +6119,17 @@ export default function App(){
       </div>
 
       {selectedRoofer
-        ?<RooferDashboard roofer={roofers.find(r=>r.id===selectedRoofer.id)||selectedRoofer} leads={leads} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
-        :activeSection==="Command Center"
-          ?<CommandCenter roofers={roofers} leads={leads} storms={storms} apiKeys={apiKeys} onUpdate={handleUpdate} onSelectRoofer={selectRoofer} scanSettings={scanSettings} onScanSettingsChange={setScanSettings} activities={activities} addActivity={addActivity} zipTerritories={zipTerritories} zipLeadPulls={zipLeadPulls} setZipLeadPulls={setZipLeadPulls}/>
-          :activeSection==="Subscriptions & Billing"
-            ?<Subscriptions roofers={roofers} seats={seats} zipTerritories={zipTerritories} onUpdate={handleUpdate}/>
-            :<APISettings apiKeys={apiKeys} onUpdate={handleUpdate}/>
+        ?<RooferDashboard roofer={roofers.find(r=>r.id===selectedRoofer.id)||selectedRoofer} leads={leads} jobs={jobs} estimates={estimates} invoices={invoices} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
+        :activeSection==="Jobs"
+          ?<JobPipeline
+              jobs={jobs} estimates={estimates} invoices={invoices}
+              roofers={roofers} leads={leads} onUpdate={handleUpdate}
+            />
+          :activeSection==="Command Center"
+            ?<CommandCenter roofers={roofers} leads={leads} storms={storms} apiKeys={apiKeys} onUpdate={handleUpdate} onSelectRoofer={selectRoofer} scanSettings={scanSettings} onScanSettingsChange={setScanSettings} activities={activities} addActivity={addActivity} zipTerritories={zipTerritories} zipLeadPulls={zipLeadPulls} setZipLeadPulls={setZipLeadPulls}/>
+            :activeSection==="Subscriptions & Billing"
+              ?<Subscriptions roofers={roofers} seats={seats} zipTerritories={zipTerritories} onUpdate={handleUpdate}/>
+              :<APISettings apiKeys={apiKeys} onUpdate={handleUpdate}/>
       }
     </main>
     <FloatingAIHelp role="admin" roofers={roofers} leads={leads} storms={storms} currentSection={activeSection}/>
