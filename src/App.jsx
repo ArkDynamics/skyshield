@@ -2083,6 +2083,19 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
   ];
 
   const[billingCycle,setBillingCycle]=useState("monthly");
+  const[page,setPage]=useState("home");
+
+  useEffect(()=>{
+    const handler=()=>{
+      const h=window.location.hash;
+      if(h==="#privacy") setPage("privacy");
+      else if(h==="#terms") setPage("terms");
+      else setPage("home");
+    };
+    handler();
+    window.addEventListener("hashchange",handler);
+    return()=>window.removeEventListener("hashchange",handler);
+  },[]);
 
   const PLANS=[
     {name:"Base CRM",
@@ -2151,6 +2164,8 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
   ];
 
   if(showLogin) return <LoginScreen onLoginSuccess={onLoginSuccess}/>;
+  if(page==="privacy") return <LegalPage type="privacy" onBack={()=>{window.location.hash="";setPage("home");}}/>;
+  if(page==="terms") return <LegalPage type="terms" onBack={()=>{window.location.hash="";setPage("home");}}/>;
 
   return(
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Inter',sans-serif",color:C.text,overflowX:"hidden"}}>
@@ -2824,15 +2839,24 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
             </span>
             <span style={{fontSize:12,color:C.textMuted}}>by Ark Dynamics</span>
           </div>
-          <div style={{display:"flex",gap:20}}>
+          <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
             {["Features","Pricing","Contact"].map(l=>(
               <a key={l} href={`#${l.toLowerCase()}`}
                 style={{fontSize:12,color:C.textMuted,textDecoration:"none"}}>{l}</a>
             ))}
+            <a href="#privacy" style={{fontSize:12,color:C.textMuted,textDecoration:"none"}}>Privacy Policy</a>
+            <a href="#terms" style={{fontSize:12,color:C.textMuted,textDecoration:"none"}}>Terms of Service</a>
           </div>
           <div style={{fontSize:12,color:C.textMuted}}>
             © {new Date().getFullYear()} Ark Dynamics · skyshieldpro@arkdynamics.io
           </div>
+        </div>
+        {/* SMS Consent notice — required for Twilio A2P 10DLC */}
+        <div style={{maxWidth:1100,margin:"12px auto 0",padding:"12px 24px",
+          borderTop:`1px solid ${C.border}`,fontSize:11,color:C.textMuted,lineHeight:1.6,textAlign:"center"}}>
+          By submitting your information, you consent to receive SMS messages from SkyShield Pro roofing contractors regarding roof inspections and storm damage assessments.
+          Message and data rates may apply. Reply STOP to opt out at any time. Reply HELP for help.
+          View our <a href="#privacy" style={{color:C.orange,textDecoration:"none"}}>Privacy Policy</a> and <a href="#terms" style={{color:C.orange,textDecoration:"none"}}>Terms of Service</a>.
         </div>
       </footer>
 
@@ -2840,6 +2864,125 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
   );
 }
 
+
+// ─── LEGAL PAGES ──────────────────────────────────────────────────────────────
+function LegalPage({type, onBack}){
+  const isPrivacy = type==="privacy";
+  const today = new Date().toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"});
+
+  const PRIVACY = [
+    {h:"Information We Collect", body:`We collect information you provide directly, including your name, email address, phone number, and property address when you submit a contact form or sign up for our services. We also collect information automatically when you use our platform, such as usage data and device information.`},
+    {h:"How We Use Your Information", body:`We use the information we collect to:
+• Provide, operate, and improve SkyShield Pro services
+• Contact you regarding roof inspections and storm damage assessments
+• Send you SMS messages related to roofing services you have requested or consented to receive
+• Process transactions and send related information
+• Respond to comments and questions`},
+    {h:"SMS Communication & Consent", body:`By providing your phone number and submitting our contact form, you expressly consent to receive SMS text messages from SkyShield Pro roofing contractors. These messages may include information about roof inspections, storm damage assessments, appointment reminders, and follow-up communications.
+
+Message frequency varies. Message and data rates may apply. You can opt out of SMS messages at any time by replying STOP to any message. Reply HELP for help. For additional assistance, contact skyshieldpro@arkdynamics.io.
+
+Carriers are not liable for delayed or undelivered messages.`},
+    {h:"Information Sharing", body:`We do not sell, trade, or rent your personal information to third parties. We may share your information with roofing contractors on our platform who will be providing services to you, and with service providers who assist us in operating our platform. We may also disclose information when required by law.`},
+    {h:"Data Security", body:`We implement appropriate technical and organizational measures to protect your personal information against unauthorized access, alteration, disclosure, or destruction. However, no method of transmission over the Internet is 100% secure.`},
+    {h:"Data Retention", body:`We retain your personal information for as long as necessary to provide our services and comply with legal obligations. You may request deletion of your personal data by contacting us at skyshieldpro@arkdynamics.io.`},
+    {h:"Your Rights", body:`You have the right to access, correct, or delete your personal information. You may also opt out of marketing communications at any time. To exercise these rights, contact us at skyshieldpro@arkdynamics.io.`},
+    {h:"Cookies", body:`Our website uses cookies and similar tracking technologies to enhance your browsing experience. You can control cookies through your browser settings.`},
+    {h:"Changes to This Policy", body:`We may update this Privacy Policy from time to time. We will notify you of any changes by posting the new policy on this page with an updated effective date.`},
+    {h:"Contact Us", body:`If you have questions about this Privacy Policy, please contact us at:\n\nArk Dynamics / SkyShield Pro\nEmail: skyshieldpro@arkdynamics.io`},
+  ];
+
+  const TERMS = [
+    {h:"Acceptance of Terms", body:`By accessing or using SkyShield Pro ("the Service"), you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the Service.`},
+    {h:"Description of Service", body:`SkyShield Pro is a roofing CRM platform that provides tools for lead management, job tracking, scheduling, estimating, invoicing, and storm lead generation for roofing companies. The service is provided by Ark Dynamics.`},
+    {h:"SMS Messaging Terms", body:`By providing your phone number to a roofing contractor using SkyShield Pro, you consent to receive automated SMS messages regarding roof inspections, storm damage assessments, and related roofing services.
+
+You can opt out at any time by replying STOP to any SMS message. After opting out, you will receive one confirmation message and no further messages will be sent. Reply HELP for assistance.
+
+Message and data rates may apply. Message frequency varies based on your interaction with our services.`},
+    {h:"User Accounts", body:`You are responsible for maintaining the confidentiality of your account credentials and for all activities that occur under your account. You must notify us immediately of any unauthorized use of your account. We reserve the right to terminate accounts that violate these terms.`},
+    {h:"Subscription and Payment", body:`SkyShield Pro is offered on a subscription basis. Fees are charged monthly or annually as selected at signup. Subscriptions automatically renew unless cancelled before the renewal date. Refunds are not provided for partial subscription periods.
+
+A 14-day free trial is available for new accounts. No credit card is required for the trial period. After the trial, a paid subscription is required to continue using the service.`},
+    {h:"Acceptable Use", body:`You agree not to use the Service to:
+• Violate any applicable laws or regulations
+• Send unsolicited messages to people who have not consented to receive them
+• Harass, abuse, or harm any person
+• Collect data in violation of any person's privacy rights
+• Transmit any malicious code or interfere with the Service`},
+    {h:"Data and Privacy", body:`Your use of the Service is subject to our Privacy Policy, which is incorporated into these Terms by reference. By using the Service, you consent to the collection and use of your information as described in our Privacy Policy.`},
+    {h:"Intellectual Property", body:`SkyShield Pro and its original content, features, and functionality are owned by Ark Dynamics and are protected by intellectual property laws. You may not copy, modify, or distribute our proprietary software or content.`},
+    {h:"Disclaimer of Warranties", body:`The Service is provided "as is" without warranties of any kind. Ark Dynamics does not warrant that the Service will be uninterrupted, error-free, or free of harmful components.`},
+    {h:"Limitation of Liability", body:`To the fullest extent permitted by law, Ark Dynamics shall not be liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the Service.`},
+    {h:"Termination", body:`We reserve the right to terminate or suspend your account at any time for violation of these Terms. You may cancel your subscription at any time through your account settings.`},
+    {h:"Governing Law", body:`These Terms shall be governed by the laws of the State of Texas, without regard to its conflict of law provisions.`},
+    {h:"Changes to Terms", body:`We reserve the right to modify these Terms at any time. We will provide notice of significant changes. Continued use of the Service after changes constitutes acceptance of the new Terms.`},
+    {h:"Contact", body:`For questions about these Terms, contact us at:\n\nArk Dynamics / SkyShield Pro\nEmail: skyshieldpro@arkdynamics.io`},
+  ];
+
+  const sections = isPrivacy ? PRIVACY : TERMS;
+  const title = isPrivacy ? "Privacy Policy" : "Terms of Service";
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"'Inter',sans-serif",
+      backgroundImage:"radial-gradient(ellipse at 20% 0%,rgba(13,148,136,0.1) 0%,transparent 50%)"}}>
+      <FontLoader/>
+      {/* Nav */}
+      <nav style={{position:"sticky",top:0,zIndex:100,
+        background:"rgba(3,14,24,0.9)",backdropFilter:"blur(20px)",
+        borderBottom:`1px solid ${C.border}`,padding:"0 16px"}}>
+        <div style={{maxWidth:800,margin:"0 auto",height:54,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <a href="#" onClick={e=>{e.preventDefault();onBack();}} style={{display:"flex",alignItems:"center",gap:8,textDecoration:"none"}}>
+            <div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,#0d9488,#0284c7)",
+              display:"flex",alignItems:"center",justifyContent:"center",fontSize:13}}>⛈</div>
+            <span style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:14,fontWeight:700,color:"#fff"}}>
+              Sky<span style={{color:C.orange}}>Shield</span> Pro
+            </span>
+          </a>
+          <button onClick={onBack} style={{fontSize:13,color:C.textSub,background:"none",border:`1px solid ${C.border}`,
+            borderRadius:7,padding:"6px 14px",cursor:"pointer"}}>← Back</button>
+        </div>
+      </nav>
+
+      {/* Content */}
+      <div style={{maxWidth:800,margin:"0 auto",padding:"48px 24px 80px"}}>
+        <div style={{marginBottom:32}}>
+          <h1 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:32,fontWeight:800,
+            color:"#fff",marginBottom:8}}>{title}</h1>
+          <p style={{fontSize:13,color:C.textSub}}>
+            Effective date: {today} · Ark Dynamics / SkyShield Pro
+          </p>
+          {isPrivacy&&<div style={{marginTop:16,padding:"12px 16px",
+            background:`${C.orange}10`,border:`1px solid ${C.orange}28`,borderRadius:8,
+            fontSize:13,color:C.textSub,lineHeight:1.6}}>
+            <strong style={{color:C.orange}}>SMS Consent:</strong> By providing your phone number, you consent to receive SMS messages from roofing contractors using SkyShield Pro. Reply STOP to opt out. Msg & data rates may apply.
+          </div>}
+        </div>
+
+        <div style={{display:"flex",flexDirection:"column",gap:28}}>
+          {sections.map((s,i)=>(
+            <div key={i}>
+              <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:17,fontWeight:700,
+                color:C.text,marginBottom:10,paddingBottom:8,
+                borderBottom:`1px solid ${C.border}`}}>{s.h}</h2>
+              <p style={{fontSize:14,color:C.textSub,lineHeight:1.8,whiteSpace:"pre-line"}}>{s.body}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Footer */}
+      <footer style={{borderTop:`1px solid ${C.border}`,padding:"20px 24px",textAlign:"center"}}>
+        <div style={{fontSize:12,color:C.textMuted}}>
+          © {new Date().getFullYear()} Ark Dynamics ·{" "}
+          <a href="#privacy" style={{color:C.textMuted}}>Privacy Policy</a>{" · "}
+          <a href="#terms" style={{color:C.textMuted}}>Terms of Service</a>{" · "}
+          skyshieldpro@arkdynamics.io
+        </div>
+      </footer>
+    </div>
+  );
+}
 
 function LoginScreen({onLoginSuccess}){
   const[view,setView]=useState("signin"); // signin | forgot | sent
