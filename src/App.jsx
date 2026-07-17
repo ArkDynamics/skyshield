@@ -3706,19 +3706,8 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
       return { success:true, count:result.leads.length };
 
     } else {
-      // Demo fallback — no Tracerfy key
-      const leadCount = Math.max(1, Math.min(eligible.length*3, 12));
-      const assignments = distributeLeadsRoundRobin(eligible, leadCount);
-      assignments.forEach(a=>onUpdate("add_lead",{lead:{
-        id:"l"+Date.now()+Math.random(),
-        homeowner:a.homeowner, phone:a.phone, zip:storm.zip,
-        rooferId:a.rooferId, stormType:storm.type, status:"pending",
-        conversations:[], notes:stormNote, contactedAt:null, followupSent:false,
-      }}));
-      onUpdate("process_storm",{stormId:storm.id});
-      await recordZipPull(storm.zip, leadCount, storm.type);
-      addActivity({type:"storm",message:`Auto-processed: ${leadCount} demo leads for ZIP ${storm.zip} — add Tracerfy key for real data`,badge:`${leadCount} leads`,badgeColor:C.orange});
-      return { success:true, count:leadCount };
+      addActivity({type:"system",message:`ZIP ${storm.zip}: Tracerfy API key not configured — skipping auto-process. Add key in API Settings.`,badge:"no key",badgeColor:C.yellow});
+      return { skipped:"no_tracerfy_key" };
     }
   }
 
@@ -3995,20 +3984,30 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
         </div>
         <div style={flex(8)}>
           <input value={manualZip} onChange={e=>setManualZip(e.target.value)} placeholder="Enter ZIP..." style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 12px",color:C.text,fontSize:13,outline:"none",width:130}}/>
-          <Btn variant="info" onClick={()=>{
+          <Btn variant="info" onClick={async()=>{
             if(!manualZip.trim())return;
             const zip=manualZip.trim();
+            const tracerfyKey=apiKeys.tracerfy;
             const eligible=roofers.filter(r=>(r.status==="active"||r.status==="test")&&(r.territories.includes(zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===zip)));
             if(eligible.length===0){ alert("No active roofer covers ZIP "+zip); setManualZip(""); return; }
-            const r=eligible.reduce((least,cur)=>{
-              const curPending=leads.filter(l=>l.rooferId===cur.id&&l.zip===zip&&l.status==="pending").length;
-              const leastPending=leads.filter(l=>l.rooferId===least.id&&l.zip===zip&&l.status==="pending").length;
-              return curPending<leastPending?cur:least;
-            },eligible[0]);
-            onUpdate("add_lead",{lead:{id:"l"+Date.now(),homeowner:randomDemoName(),phone:randomDemoPhone(),zip,rooferId:r.id,stormType:"Manual",status:"pending",conversations:[],notes:"",contactedAt:null,followupSent:false}});
-            addActivity({type:"lead",message:`Manual lead for ${r.name} in ZIP ${zip}`});
-            alert("Lead created for "+r.name);
-            setManualZip("");
+            const stormNote="Manual campaign — ZIP "+zip;
+            if(tracerfyKey){
+              setScanStatus(`Building lead list for ZIP ${zip}...`);
+              const result=await buildLeadsForZip(zip,tracerfyKey,msg=>setScanStatus(msg));
+              if(result.error){ alert("Lead builder error: "+result.error); setScanStatus(""); setManualZip(""); return; }
+              if(!result.leads.length){ alert("No homeowner contacts found for ZIP "+zip+"."); setScanStatus(""); setManualZip(""); return; }
+              let rooferIdx=0;
+              result.leads.forEach(lead=>{
+                const r=eligible[rooferIdx%eligible.length]; rooferIdx++;
+                onUpdate("add_lead",{lead:{id:"l"+Date.now()+Math.random(),homeowner:lead.homeowner,phone:lead.phone,email:lead.email||"",address:lead.address,zip,rooferId:r.id,stormType:"Manual",status:"pending",conversations:[],notes:stormNote,contactedAt:null,followupSent:false}});
+              });
+              await recordZipPull(zip,result.leads.length,"Manual");
+              addActivity({type:"lead",message:`Manual campaign ZIP ${zip} — ${result.leads.length} real leads`,badge:`${result.leads.length} leads`,badgeColor:C.green});
+              alert(`✓ ${result.leads.length} homeowner leads created for ZIP ${zip}.`);
+              setScanStatus(""); setManualZip("");
+            } else {
+              alert("Tracerfy API key required.\n\nGo to API Settings → Tracerfy Skip Trace and add your API key.");
+            }
           }}>+ Campaign</Btn>
         </div>
       </div>
@@ -4091,13 +4090,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
                   alert(`✓ ${result.leads.length} real homeowner leads distributed.\n\n${perRoofer}\n\nEach lead has the owner's name and phone number from Tracerfy.`);
 
                 } else {
-                  // ── Fallback: demo data (no Tracerfy key configured) ──────
-                  const leadCount=Math.max(1,Math.min(eligible.length*3,12));
-                  const assignments=distributeLeadsRoundRobin(eligible,leadCount);
-                  assignments.forEach(a=>onUpdate("add_lead",{lead:{id:"l"+Date.now()+Math.random(),homeowner:a.homeowner,phone:a.phone,zip:st.zip,rooferId:a.rooferId,stormType:st.type,status:"pending",conversations:[],notes:"Storm: "+(st.headline||st.type)+(st.detail?.hailSize?" | Hail: "+st.detail.hailSize:"")+(st.detail?.windSpeed?" | Wind: "+st.detail.windSpeed:""),contactedAt:null,followupSent:false}}));
-                  onUpdate("process_storm",{stormId:st.id});
-                  addActivity({type:"storm",message:`Storm ${st.location} processed — ${assignments.length} demo leads (add Tracerfy key for real data)`,badge:`${eligible.length} roofers`,badgeColor:C.orange});
-                  alert(`Processed with demo data: ${assignments.length} leads.\n\nTo get real homeowner names & numbers, add your Tracerfy API key in API Settings.`);
+                  alert("Tracerfy API key required to process storms.\n\nGo to API Settings → Tracerfy Skip Trace and add your API key to pull real homeowner data.");
                 }
               }}>Process</Btn>}
             </div>
