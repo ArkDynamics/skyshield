@@ -2085,23 +2085,55 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
   const[billingCycle,setBillingCycle]=useState("monthly");
 
   const PLANS=[
-    {name:"Starter",
-      monthly:1500, annual:14997, annualMonthly:1250,
+    {name:"Base CRM",
+      monthly:275, annual:2750, annualMonthly:229,
       color:C.blue,
-      features:["1 user","1 city","10 ZIP codes","Standard storm alerts","Lead dashboard","Inspection scheduling"],
-      zipLimit:10, seats:1,
+      badge:null,
+      features:[
+        "Full roofing CRM",
+        "Job pipeline (Lead → Paid)",
+        "AI-generated proposals & estimates",
+        "Invoice generation & payment tracking",
+        "Insurance claim tracker",
+        "Photo documentation per job",
+        "Inspection scheduling",
+        "Lead management dashboard",
+        "SMS conversations",
+        "1 user seat",
+      ],
+      note:"No credit card required · 14-day free trial",
     },
     {name:"Pro",
       monthly:2000, annual:19997, annualMonthly:1666,
       color:C.orange, popular:true,
-      features:["1 user","1 city","20 ZIP codes","Priority storm alerts","Lead dashboard","Inspection scheduling"],
-      zipLimit:20, seats:1,
+      badge:"Most Popular",
+      features:[
+        "Everything in Base CRM",
+        "Storm lead generation",
+        "Auto-detect hail, wind, tornadoes",
+        "Tracerfy homeowner data ($0.04/lead)",
+        "AI SMS outreach to homeowners",
+        "20 ZIP code territories",
+        "Smart cooldown re-engagement",
+        "Round-robin lead distribution",
+        "1 user seat + up to 5 additional",
+      ],
+      note:"Includes lead gen add-on",
     },
     {name:"Growth",
       monthly:2750, annual:27497, annualMonthly:2291,
       color:C.purple,
-      features:["3 users","2 cities","30 ZIP codes","Priority storm alerts","Lead dashboard","Inspection scheduling","Advanced reporting"],
-      zipLimit:30, seats:3,
+      badge:null,
+      features:[
+        "Everything in Pro",
+        "30 ZIP code territories",
+        "3 included user seats",
+        "Priority storm alerts",
+        "Advanced reporting",
+        "2 cities",
+        "Up to 5 additional seats",
+      ],
+      note:"Best for larger teams",
     },
   ];
 
@@ -2529,7 +2561,7 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
           <h2 style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:40,fontWeight:800,letterSpacing:"-0.02em",color:"#fff",marginBottom:14}}>
             Start free. Upgrade when ready.
           </h2>
-          <p style={{fontSize:15,color:C.textSub,marginBottom:24}}>14-day free trial on all plans. No credit card required. One-time $500 setup fee.</p>
+          <p style={{fontSize:15,color:C.textSub,marginBottom:24}}>Start with a 14-day free trial of the Base CRM — no credit card required. Upgrade to Pro or Growth to unlock storm lead generation.</p>
           {/* Billing toggle */}
           <div style={{display:"inline-flex",alignItems:"center",gap:0,
             background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:30,padding:4}}>
@@ -2578,19 +2610,8 @@ function LandingPage({onSignIn, showLogin, onLoginSuccess}){
                   <span style={{fontSize:12,color:C.textMuted,textDecoration:"line-through"}}>${(p.monthly*12).toLocaleString()}/yr</span>
                   <span style={{fontSize:11,color:C.green,marginLeft:8}}>≈ ${monthlyEquiv?.toLocaleString()}/mo</span>
                 </div>}
-                <div style={{fontSize:11,color:C.textMuted,marginBottom:20}}>+ one-time $500 setup fee · after 14-day free trial</div>
+                <div style={{fontSize:11,color:C.textMuted,marginBottom:20}}>{p.note}</div>
                 <div style={{height:1,background:C.border,marginBottom:18}}/>
-                {/* Limits */}
-                <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
-                  <span style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:6,
-                    background:`${p.color}14`,color:p.color,border:`1px solid ${p.color}28`}}>
-                    {p.seats} seat{p.seats>1?"s":""}
-                  </span>
-                  <span style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:6,
-                    background:`${p.color}14`,color:p.color,border:`1px solid ${p.color}28`}}>
-                    {p.zipLimit} ZIPs
-                  </span>
-                </div>
                 <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:24}}>
                   {p.features.map(f=>(
                     <div key={f} style={{display:"flex",alignItems:"flex-start",gap:10}}>
