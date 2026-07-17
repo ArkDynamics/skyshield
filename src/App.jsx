@@ -136,8 +136,8 @@ function trialDaysRemaining(roofer){
   return Math.max(0, remaining);
 }
 function trialExpired(roofer){
-  if(roofer.status==="active") return false; // paid, never expires
-  if(!roofer.trialStartedAt) return false;   // trial hasn't started
+  if(roofer.status==="active"||roofer.status==="test") return false; // paid or test, never expires
+  if(!roofer.trialStartedAt) return false;
   return trialDaysRemaining(roofer) <= 0;
 }
 
@@ -871,7 +871,7 @@ function Modal({title,onClose,children,wide}){
 }
 function Divider(){return <div style={{height:1,background:C.border,margin:"4px 0"}}/>;}
 function SeverityBadge({severity}){return <Badge label={severity} color={{extreme:C.red,severe:C.orange,moderate:C.yellow}[severity]||C.blue}/>;}
-function StatusBadge({status}){return <Badge label={status} color={{active:C.green,trial:C.yellow,cancelled:C.red,pending:C.orange,contacted:C.blue,scheduled:C.green,won:C.purple,cold:C.textMuted}[status]||C.textMuted}/>;}
+function StatusBadge({status}){return <Badge label={status} color={{active:C.green,trial:C.yellow,cancelled:C.red,past_due:C.red,test:C.blue,pending:C.orange,contacted:C.blue,scheduled:C.green,won:C.purple,cold:C.textMuted}[status]||C.textMuted}/>;}
 
 function MiniBarChart({data}){
   const max=Math.max(...data.map(d=>d.value),1);
@@ -3618,7 +3618,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
   // ── AUTO PROCESS A SINGLE STORM ──────────────────────────────────────────
   async function autoProcessStorm(storm){
     const eligible = roofers.filter(r=>
-      r.status==="active" &&
+      (r.status==="active"||r.status==="test") &&
       (r.territories.includes(storm.zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===storm.zip))
     );
     if(!eligible.length) return { skipped:"no_roofers" };
@@ -3998,7 +3998,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           <Btn variant="info" onClick={()=>{
             if(!manualZip.trim())return;
             const zip=manualZip.trim();
-            const eligible=roofers.filter(r=>r.status==="active"&&(r.territories.includes(zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===zip)));
+            const eligible=roofers.filter(r=>(r.status==="active"||r.status==="test")&&(r.territories.includes(zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===zip)));
             if(eligible.length===0){ alert("No active roofer covers ZIP "+zip); setManualZip(""); return; }
             const r=eligible.reduce((least,cur)=>{
               const curPending=leads.filter(l=>l.rooferId===cur.id&&l.zip===zip&&l.status==="pending").length;
@@ -4037,7 +4037,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
             <div style={flex(6)}>
               <Btn small variant="ghost" onClick={()=>setSelectedStorm(st)}>Report</Btn>
               {!st.processed&&<Btn small variant="primary" onClick={async()=>{
-                const eligible=roofers.filter(r=>r.status==="active"&&(r.territories.includes(st.zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===st.zip)));
+                const eligible=roofers.filter(r=>(r.status==="active"||r.status==="test")&&(r.territories.includes(st.zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===st.zip)));
                 if(eligible.length===0){ alert("No active roofers cover ZIP "+st.zip+"."); return; }
 
                 const tracerfyKey = apiKeys.tracerfy;
@@ -5699,10 +5699,17 @@ function Subscriptions({roofers,seats,zipTerritories,onUpdate}){
                   if(result.error) alert("Billing error: "+result.error);
                 }}>Cancel</Btn>
             }
+            {r.status!=="test"
+              ?<Btn small variant="info" onClick={()=>{
+                  if(!window.confirm(`Set ${r.name} as a test account? They'll get full access with no billing or trial limits.`)) return;
+                  onUpdate("update_roofer_status",{rooferId:r.id,status:"test"});
+                }}>Set as Test</Btn>
+              :<Btn small variant="warning" onClick={()=>onUpdate("update_roofer_status",{rooferId:r.id,status:"trial"})}>Remove Test</Btn>
+            }
             {r.stripeStatus==="past_due"&&<Btn small variant="warning" onClick={async()=>{
               const result=await billingCall("/stripe/payment-link",{rooferId:r.id,plan:r.plan});
               if(result.url) window.open(result.url,"_blank");
-            }}>💳 Resend Link</Btn>}
+            }}>Resend Link</Btn>}
           </TD>
         </TR>)}
       </TableWrap>
@@ -6133,7 +6140,7 @@ export default function App(){
     const live=roofers.find(r=>r.id===auth.roofer.id)||auth.roofer;
 
     // Payment gate — block access if subscription is past_due or cancelled
-    if(live.stripeStatus==="past_due"||live.status==="past_due"){
+    if((live.stripeStatus==="past_due"||live.status==="past_due")&&live.status!=="test"){
       return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}><FontLoader/>
         <div style={{...card(),maxWidth:460,width:"100%",textAlign:"center",padding:36}}>
           <div style={{fontSize:28,marginBottom:16,color:"#f87171",fontWeight:700}}>!</div>
