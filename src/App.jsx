@@ -493,7 +493,7 @@ const DEFAULT_COMM = {
   activeHoursStart:"08:00", activeHoursEnd:"18:00",
   activeDays:["Mon","Tue","Wed","Thu","Fri"],
   followupDays:2, coldDays:5,
-  aiAutoReply:false, // when true, incoming lead SMS replies get a Claude-generated response
+  aiAutoReply:true, // when true, incoming lead SMS replies get a Claude-generated response
   requireAdultPresent:true, // require AI to confirm an adult (18+) will be present before booking
   templates:{
     initial:"Hi {{name}}, we noticed your area ({{zip}}) was recently hit by a {{storm}} storm. {{company}} offers FREE roof inspections — reply YES to schedule yours today!",

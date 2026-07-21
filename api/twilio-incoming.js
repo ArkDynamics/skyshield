@@ -180,8 +180,10 @@ export default async function handler(req, res) {
     const newStatus = lead.status === "pending" ? "contacted" : lead.status;
 
     // 4. Check if auto-reply is enabled for this roofer
-    const commSettings = roofer?.comm_settings || {};
-    const autoReplyEnabled = commSettings.autoReply === true || commSettings.autoReply === "true";
+    const rawComm = roofer?.comm_settings;
+    const commSettings = typeof rawComm === "string" ? JSON.parse(rawComm) : (rawComm || {});
+    const autoReplyEnabled = commSettings.aiAutoReply === true || commSettings.aiAutoReply === "true"
+      || Object.keys(commSettings).length === 0; // default ON if no settings saved yet
 
     let aiReply = null;
     if (autoReplyEnabled && roofer) {
@@ -189,23 +191,22 @@ export default async function handler(req, res) {
     }
 
     // 5. If we have an AI reply, send it
-    if (aiReply && roofer?.twilio_from) {
-      const twilioRows = await sbGet("roofers", `id=eq.${roofer.id}`);
-      const r = twilioRows?.[0];
-      if (r) {
-        // Get Twilio credentials from app_state api_keys
-        const appRows = await sbGet("app_state", "id=eq.singleton");
-        const apiKeys = appRows?.[0]?.api_keys || {};
-        const twilio = apiKeys.twilio;
+    if (aiReply && toNumber) {
+      // Get Twilio credentials from app_state api_keys
+      const appRows = await sbGet("app_state", "id=eq.singleton");
+      const apiKeys = appRows?.[0]?.api_keys || {};
+      const twilio = typeof apiKeys === "string" ? JSON.parse(apiKeys) : apiKeys;
+      const twilioKeys = twilio?.twilio;
 
-        if (twilio?.sid && twilio?.token) {
-          await sendSMS(twilio.sid, twilio.token, toNumber, fromNumber, aiReply);
-          conversations.push({
-            role: "ai",
-            msg: aiReply,
-            ts: new Date().toLocaleString(),
-          });
-        }
+      if (twilioKeys?.sid && twilioKeys?.token) {
+        await sendSMS(twilioKeys.sid, twilioKeys.token, toNumber, fromNumber, aiReply);
+        conversations.push({
+          role: "ai",
+          msg: aiReply,
+          ts: new Date().toLocaleString(),
+        });
+      } else {
+        console.warn("No Twilio credentials found in app_state");
       }
     }
 
