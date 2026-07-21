@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import React from "react";
 
 // ─── SUPABASE CLIENT ──────────────────────────────────────────────────────────
 const SUPABASE_URL = "https://zwadqhocdooikfokontb.supabase.co";
@@ -610,7 +611,7 @@ const grid = (cols,gap=12) => ({ display:"grid", gridTemplateColumns:cols, gap }
 function isWithinCommWindow(comm){
   const now=new Date(),days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],today=days[now.getDay()];
   if(!comm.activeDays.includes(today)) return false;
-  const[sh,sm]=comm.activeHoursStart.split(":").map(Number),[eh]=comm.activeHoursEnd.split(":").map(Number);
+  const[sh,sm]=(comm.activeHoursStart||"08:00").split(":").map(Number),[eh]=comm.activeHoursEnd.split(":").map(Number);
   const nowM=now.getHours()*60+now.getMinutes();
   return nowM>=sh*60+sm&&nowM<=eh*60;
 }
@@ -874,7 +875,7 @@ function SeverityBadge({severity}){return <Badge label={severity} color={{extrem
 function StatusBadge({status}){return <Badge label={status} color={{active:C.green,trial:C.yellow,cancelled:C.red,past_due:C.red,test:C.blue,pending:C.orange,contacted:C.blue,scheduled:C.green,won:C.purple,cold:C.textMuted}[status]||C.textMuted}/>;}
 
 function MiniBarChart({data}){
-  const max=Math.max(...data.map(d=>d.value),1);
+  const max=Math.max(...(data||[]).map(d=>d.value),1);
   return <div style={{display:"flex",alignItems:"flex-end",gap:8,height:72,padding:"4px 0"}}>
     {data.map((d,i)=><div key={i} style={{display:"flex",flexDirection:"column",alignItems:"center",flex:1,gap:4}}>
       <div style={{width:"60%",background:d.color||C.orange,height:`${Math.max((d.value/max)*56,d.value>0?3:0)}px`,borderRadius:"3px 3px 0 0",opacity:0.85}}/>
@@ -988,7 +989,7 @@ async function getGCalAccessToken(creds){
 const ACT_ICONS={storm:"◆",lead:"◈",sms:"→",booking:"▦",revenue:"$",roofer:"◈",system:"◆",followup:"↺"};
 function ActivityFeed({activities}){
   if(!activities.length) return <div style={{padding:28,textAlign:"center",color:C.textMuted,fontSize:13}}>No activity recorded yet.</div>;
-  return <div>{activities.slice(0,60).map((a,i)=>(
+  return <div>{(activities||[]).slice(0,60).map((a,i)=>(
     <div key={i} style={{...flex(12,"flex-start"),padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
       <div style={{fontSize:15,minWidth:22,marginTop:1}}>{ACT_ICONS[a.type]||"·"}</div>
       <div style={{flex:1,minWidth:0}}>
@@ -1006,7 +1007,7 @@ function ActivityFeed({activities}){
 function NotificationBell({roofer,onMarkRead}){
   const[open,setOpen]=useState(false);
   const notifications=roofer.notifications||[];
-  const unreadCount=notifications.filter(n=>!n.read).length;
+  const unreadCount=(notifications||[]).filter(n=>!n.read).length;
   const ref=useRef(null);
 
   useEffect(()=>{
@@ -1030,7 +1031,7 @@ function NotificationBell({roofer,onMarkRead}){
       <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:600,color:C.text}}>Notifications</div>
       {notifications.length===0
         ?<div style={{padding:24,textAlign:"center",fontSize:12,color:C.textMuted}}>No notifications yet.</div>
-        :notifications.map(n=>
+        :(notifications||[]).map(n=>
           <div key={n.id} style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,background:n.read?"transparent":C.orangeDim}}>
             <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{n.message}</div>
             <div style={{fontSize:10,color:C.textMuted,marginTop:3}}>{n.ts}</div>
@@ -1050,11 +1051,11 @@ function StormMap({storms,roofers}){
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
     inst.current=map;
     const sc={extreme:C.red,severe:C.orange,moderate:C.yellow};
-    storms.filter(s=>s.lat&&s.lng).forEach(st=>{
+    (storms||[]).filter(s=>s.lat&&s.lng).forEach(st=>{
       L.circleMarker([st.lat,st.lng],{radius:13,fillColor:sc[st.severity]||C.blue,color:"#fff",weight:2,opacity:1,fillOpacity:0.85}).addTo(map).bindPopup(`<b>${st.type}</b><br>${st.location}<br>ZIP: ${st.zip}<br>Severity: ${st.severity}<br>${st.date}`);
     });
     const zc=[C.blue,C.purple,C.green,C.orange,C.red];
-    roofers.forEach((r,ri)=>r.territories.forEach(zip=>{
+    (roofers||[]).forEach((r,ri)=>(r.territories||[]).forEach(zip=>{
       const st=storms.find(s=>s.zip===zip&&s.lat&&s.lng);
       if(st) L.circle([st.lat,st.lng],{radius:8500,fillColor:zc[ri%zc.length],color:zc[ri%zc.length],weight:1,opacity:0.4,fillOpacity:0.06}).addTo(map).bindPopup(`<b>${r.name}</b><br>Territory: ${zip}`);
     }));
@@ -1412,7 +1413,7 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
       </div>
       <div style={{height:270,overflow:"auto",display:"flex",flexDirection:"column",gap:8,padding:2}}>
         {lead.conversations.length===0&&<div style={{textAlign:"center",color:C.textMuted,padding:40,fontSize:13}}>No messages yet.</div>}
-        {lead.conversations.map((c,i)=><div key={i} style={{display:"flex",flexDirection:"column",alignItems:c.role==="ai"?"flex-start":"flex-end"}}>
+        {(lead.conversations||[]).map((c,i)=><div key={i} style={{display:"flex",flexDirection:"column",alignItems:c.role==="ai"?"flex-start":"flex-end"}}>
           <div style={{padding:"8px 12px",borderRadius:8,fontSize:13,lineHeight:1.6,maxWidth:"82%",background:c.role==="ai"?C.blueDim:C.greenDim,border:`1px solid ${c.role==="ai"?C.blue+"28":C.green+"28"}`,whiteSpace:"pre-wrap"}}>{c.msg}</div>
           <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{c.role==="ai"?"AI Agent":"Lead"} · {c.ts}</div>
         </div>)}
@@ -1592,7 +1593,7 @@ function AddRooferModal({onClose,onAdd}){
 }
 
 function EditRooferModal({roofer,onClose,onSave}){
-  const[f,setF]=useState({name:roofer.name,owner:roofer.owner,email:roofer.email,phone:roofer.phone,territories:roofer.territories.join(", "),plan:roofer.plan,status:roofer.status,pin:roofer.pin||"",twilioFrom:roofer.twilioFrom||""});
+  const[f,setF]=useState({name:roofer.name,owner:roofer.owner,email:roofer.email,phone:roofer.phone,territories:(roofer.territories||[]).join(", "),plan:roofer.plan,status:roofer.status,pin:roofer.pin||"",twilioFrom:roofer.twilioFrom||""});
   const u=k=>v=>setF(p=>({...p,[k]:v}));
   return <Modal title="Edit Roofer" onClose={onClose}>
     <div style={{display:"flex",flexDirection:"column",gap:13}}>
@@ -1716,7 +1717,7 @@ function AddInspectorModal({onClose,onAdd}){
 // and existing bookings — so anything shown here is guaranteed conflict-free.
 function AvailabilityPicker({roofer,inspectorId,onInspectorChange,selectedISO,onSelectSlot,excludeId}){
   const[dateStr,setDateStr]=useState(toISODate(new Date()));
-  const inspector=roofer.inspectors.find(i=>i.id===inspectorId);
+  const inspector=(roofer.inspectors||[]).find(i=>i.id===inspectorId);
   const slots=inspectorId?getOpenSlotsForDay(roofer,inspectorId,dateStr,excludeId):[];
   const sched=roofer.scheduleSettings||DEFAULT_SCHEDULE;
   const dow=DOW_NAMES[new Date(dateStr+"T12:00:00").getDay()];
@@ -1731,7 +1732,7 @@ function AvailabilityPicker({roofer,inspectorId,onInspectorChange,selectedISO,on
   const nextAvailable=inspectorId?getNextAvailableSlots(roofer,inspectorId,{limit:1,excludeId}):[];
 
   return <div style={{display:"flex",flexDirection:"column",gap:12}}>
-    <Select label="Inspector" value={inspectorId||""} onChange={onInspectorChange} options={[{value:"",label:"Select inspector..."},...roofer.inspectors.map(i=>({value:i.id,label:i.name}))]}/>
+    <Select label="Inspector" value={inspectorId||""} onChange={onInspectorChange} options={[{value:"",label:"Select inspector..."},...(roofer.inspectors||[]).map(i=>({value:i.id,label:i.name}))]}/>
 
     {inspectorId&&<>
       <div style={{...flex(0,"center","space-between")}}>
@@ -1800,7 +1801,7 @@ function AddInspectionModal({roofer,onClose,onAdd,onReschedule,leadToBook,existi
       }
     }
     setError("");
-    const inspector=roofer.inspectors.find(i=>i.id===inspectorId);
+    const inspector=(roofer.inspectors||[]).find(i=>i.id===inspectorId);
     const payload={
       id:existingInspection?.id||"ins"+Date.now(),
       client:client.trim(), address:address.trim(),
@@ -3165,7 +3166,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
     alert(`SMS sent to ${lead.homeowner}:\n\n${msg}`);
   }
   function bookLead(lead){
-    const inspector=roofer.inspectors.find(i=>i.zones.includes(lead.zip))||roofer.inspectors[0];
+    const inspector=(roofer.inspectors||[]).find(i=>(i.zones||[]).includes(lead.zip))||(roofer.inspectors||[])[0];
     if(!inspector){ alert("Add an inspector before booking inspections."); return; }
     const comm=roofer.commSettings||DEFAULT_COMM;
     if(comm.requireAdultPresent!==false&&lead.adultConfirmed!=="confirmed"){
@@ -3282,8 +3283,8 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
 
     {tab==="Calendar"&&<div>
       <div style={{...flex(0,"center","space-between"),marginBottom:14,flexWrap:"wrap",gap:8}}>
-        <div style={{fontSize:12,color:C.textMuted}}>{roofer.inspectors.length===0?"Add an inspector first to enable scheduling.":`${roofer.inspectors.length} inspector(s) · ${(roofer.scheduleSettings||DEFAULT_SCHEDULE).durationMins}min appointments`}</div>
-        <Btn variant="primary" onClick={()=>setBookingModal({})} disabled={roofer.inspectors.length===0}>+ New Appointment</Btn>
+        <div style={{fontSize:12,color:C.textMuted}}>{(roofer.inspectors||[]).length===0?"Add an inspector first to enable scheduling.":`${roofer.inspectors.length} inspector(s) · ${(roofer.scheduleSettings||DEFAULT_SCHEDULE).durationMins}min appointments`}</div>
+        <Btn variant="primary" onClick={()=>setBookingModal({})} disabled={(roofer.inspectors||[]).length===0}>+ New Appointment</Btn>
       </div>
       {Object.keys(groupedIns).length===0?<div style={{...card({textAlign:"center",padding:40,color:C.textMuted,fontSize:13})}}>No inspections scheduled. Click "+ New Appointment" to add a walk-in customer or book a lead.</div>:Object.entries(groupedIns).sort().map(([date,insps])=><div key={date} style={{marginBottom:16}}>
         <div style={{...T.head(12,600),color:C.orange,marginBottom:8}}>{new Date(date+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"})}</div>
@@ -3338,8 +3339,8 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
 
     {tab==="Inspectors"&&<div>
       <div style={{...flex(0,"center","flex-end"),marginBottom:14}}><Btn variant="primary" onClick={()=>setShowAddInspector(true)}>+ Add Inspector</Btn></div>
-      <TableWrap headers={["Name","Phone","ZIP Zones"]} empty={roofer.inspectors.length===0?"No inspectors added yet.":undefined}>
-        {roofer.inspectors.map(ins=><TR key={ins.id}>
+      <TableWrap headers={["Name","Phone","ZIP Zones"]} empty={(roofer.inspectors||[]).length===0?"No inspectors added yet.":undefined}>
+        {(roofer.inspectors||[]).map(ins=><TR key={ins.id}>
           <TD bold>{ins.name}</TD>
           <TD dim>{ins.phone}</TD>
           <TD><div style={{...flex(6),flexWrap:"wrap"}}>{ins.zones.map(z=><Badge key={z} label={z} color={C.blue} small/>)}</div></TD>
@@ -3353,7 +3354,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
         <Btn variant="primary" onClick={()=>{if(newZip.trim()){onUpdate("add_territory",{rooferId:roofer.id,zip:newZip.trim()});setNewZip("");}}}>Add ZIP</Btn>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:10}}>
-        {roofer.territories.map(zip=><div key={zip} style={{...card({display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px"})}}><span style={{fontSize:13,fontWeight:600}}>{zip}</span><button onClick={()=>onUpdate("remove_territory",{rooferId:roofer.id,zip})} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:18,lineHeight:1}}>×</button></div>)}
+        {(roofer.territories||[]).map(zip=><div key={zip} style={{...card({display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px"})}}><span style={{fontSize:13,fontWeight:600}}>{zip}</span><button onClick={()=>onUpdate("remove_territory",{rooferId:roofer.id,zip})} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:18,lineHeight:1}}>×</button></div>)}
       </div>
     </div>}
 
@@ -3375,7 +3376,7 @@ function QuickAssignRow({roofer,onSave}){
   return <div style={{...flex(10,"center","space-between"),padding:"8px 10px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`}}>
     <div style={{minWidth:0,flex:"0 0 160px"}}>
       <div style={{fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{roofer.name}</div>
-      <div style={{fontSize:10,color:C.textMuted}}>{roofer.territories.join(", ")||"no territories"}</div>
+      <div style={{fontSize:10,color:C.textMuted}}>{(roofer.territories||[]).join(", ")||"no territories"}</div>
     </div>
     <div style={{flex:1,display:"flex",gap:8,alignItems:"center",minWidth:0}}>
       <input value={value} onChange={e=>setValue(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSave()} placeholder="+19725550199"
@@ -3840,7 +3841,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
             const requireAdult=comm.requireAdultPresent!==false;
             const gateOk=!requireAdult||result.adultConfirmed==="confirmed";
             if(result.readyToSchedule&&gateOk&&lead.status!=="scheduled"){
-              const inspector=roofer.inspectors.find(i=>i.zones.includes(lead.zip))||roofer.inspectors[0];
+              const inspector=(roofer.inspectors||[]).find(i=>(i.zones||[]).includes(lead.zip))||(roofer.inspectors||[])[0];
               const nextSlot=inspector?getNextAvailableSlots(roofer,inspector.id,{limit:1})[0]:null;
               if(inspector&&nextSlot){
                 const ins={id:"ins"+Date.now(),client:lead.homeowner,address:(lead.address?`${lead.address}, ${lead.zip}`:lead.zip),phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
@@ -4782,7 +4783,7 @@ function EstimateBuilder({job, estimate, onSave, onClose}){
   function addItem(){ setItems(p=>[...p,{id:"li"+Date.now(),type:"Labor",description:"",qty:1,unit:"sq",unitPrice:0,total:0}]); }
   function removeItem(idx){ setItems(p=>p.filter((_,i)=>i!==idx)); }
 
-  const subtotal=items.reduce((s,i)=>s+Number(i.total||0),0);
+  const subtotal=(items||[]).reduce((s,i)=>s+Number(i.total||0),0);
   const taxAmt=subtotal*(Number(taxRate)||0)/100;
   const total=subtotal+taxAmt-Number(discount||0);
 
@@ -4994,10 +4995,10 @@ function InvoiceModal({job, estimate, invoice, onSave, onClose}){
   const[payAmt,setPayAmt]=useState("");
   const[payNote,setPayNote]=useState("");
 
-  const subtotal=items.reduce((s,i)=>s+Number(i.total||0),0);
+  const subtotal=(items||[]).reduce((s,i)=>s+Number(i.total||0),0);
   const taxAmt=estimate?.taxAmount||invoice?.taxAmount||0;
   const total=subtotal+taxAmt-(estimate?.discount||0);
-  const amountPaid=payments.reduce((s,p)=>s+Number(p.amount||0),0);
+  const amountPaid=(payments||[]).reduce((s,p)=>s+Number(p.amount||0),0);
   const balanceDue=total-amountPaid;
   const status=balanceDue<=0?"paid":amountPaid>0?"partial":"unpaid";
 
@@ -5825,6 +5826,55 @@ function APISettings({apiKeys,onUpdate}){
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
+// ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
+// Catches any unhandled React render errors so the screen doesn't go blank.
+// Shows a friendly recovery UI instead of a white screen.
+class ErrorBoundary extends React.Component {
+  constructor(props){ super(props); this.state={hasError:false,error:null,errorInfo:null}; }
+  static getDerivedStateFromError(error){ return {hasError:true,error}; }
+  componentDidCatch(error,errorInfo){
+    console.error("SkyShield Error:",error,errorInfo);
+    this.setState({errorInfo});
+  }
+  render(){
+    if(!this.state.hasError) return this.props.children;
+    return(
+      <div style={{minHeight:"100vh",background:"#030e18",display:"flex",alignItems:"center",
+        justifyContent:"center",padding:20,fontFamily:"'Inter',sans-serif"}}>
+        <div style={{background:"#071828",border:"1px solid rgba(248,113,113,0.3)",borderRadius:16,
+          padding:36,maxWidth:480,width:"100%",textAlign:"center",
+          boxShadow:"0 24px 60px rgba(0,0,0,0.5)"}}>
+          <div style={{fontSize:32,marginBottom:16,color:"#f87171",fontWeight:700}}>!</div>
+          <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:700,
+            color:"#fff",marginBottom:8}}>Something went wrong</div>
+          <div style={{fontSize:13,color:"#5a9ab0",lineHeight:1.6,marginBottom:8}}>
+            An unexpected error occurred. Your data is safe — click below to recover.
+          </div>
+          {this.state.error&&<div style={{fontSize:11,color:"rgba(160,196,208,0.4)",
+            background:"rgba(0,0,0,0.3)",borderRadius:6,padding:"8px 12px",
+            marginBottom:20,textAlign:"left",fontFamily:"monospace",wordBreak:"break-all"}}>
+            {this.state.error.toString()}
+          </div>}
+          <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+            <button onClick={()=>this.setState({hasError:false,error:null,errorInfo:null})}
+              style={{fontSize:13,fontWeight:600,padding:"10px 22px",borderRadius:8,
+                background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",
+                border:"none",cursor:"pointer",boxShadow:"0 4px 14px rgba(13,148,136,0.35)"}}>
+              Try Again
+            </button>
+            <button onClick={()=>window.location.reload()}
+              style={{fontSize:13,fontWeight:600,padding:"10px 22px",borderRadius:8,
+                background:"transparent",color:"#5a9ab0",
+                border:"1px solid rgba(80,200,220,0.2)",cursor:"pointer"}}>
+              Reload Page
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+
 export default function App(){
   const[roofers,setRoofers]=useState([]);
   const[seats,setSeats]=useState([]);
@@ -6117,8 +6167,8 @@ export default function App(){
   if(resetToken) return <><FontLoader/><ResetPasswordScreen accessToken={resetToken} onDone={()=>{setResetToken(null);window.location.hash="";}}/></>;
 
   // ── SHOW LOGIN ─────────────────────────────────────────────────────────────
-  if(checkingSession) return <><FontLoader/><div style={{minHeight:"100vh",background:C.bg}}/></>;
-  if(!auth.loggedIn) return <><FontLoader/><LandingPage onSignIn={()=>setShowLogin(true)} showLogin={showLogin} onLoginSuccess={handleLoginSuccess}/></>;
+  if(checkingSession) return <ErrorBoundary><FontLoader/><div style={{minHeight:"100vh",background:C.bg}}/></ErrorBoundary>;
+  if(!auth.loggedIn) return <ErrorBoundary><FontLoader/><LandingPage onSignIn={()=>setShowLogin(true)} showLogin={showLogin} onLoginSuccess={handleLoginSuccess}/></ErrorBoundary>;
 
   // ── LOADING DATA FROM SUPABASE ─────────────────────────────────────────────
   if(!dataLoaded) return <><FontLoader/><div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -6191,7 +6241,7 @@ export default function App(){
     const daysLeft=trialDaysRemaining(live);
     const showTrialBanner=live.status==="trial"&&daysLeft<=5&&daysLeft>0;
 
-    return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)"}}><FontLoader/>
+    return <ErrorBoundary><div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)"}}><FontLoader/>
       {showWhatsNew&&<WhatsNewModal onDismiss={dismissWhatsNew}/>}
       {showTrialBanner&&<div style={{background:`linear-gradient(90deg,${C.amber}22,${C.amber}11)`,borderBottom:`1px solid ${C.amber}44`,padding:"8px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
         <div style={{fontSize:12,color:C.amber,fontWeight:500}}>Your free trial expires in <strong>{daysLeft} day{daysLeft===1?"":"s"}</strong>. Upgrade now to keep access to all your data and leads.</div>
@@ -6225,11 +6275,11 @@ export default function App(){
         <RooferDashboard roofer={live} leads={leads} jobs={jobs} estimates={estimates} invoices={invoices} apiKeys={apiKeys} onUpdate={handleUpdate} addActivity={addActivity}/>
       </main>
       <FloatingAIHelp role="roofer" roofer={live} leads={leads.filter(l=>l.rooferId===live.id)} storms={[]} currentSection="Roofer Dashboard"/>
-    </div>;
+    </div></ErrorBoundary>;
   }
 
   // ── ADMIN VIEW ─────────────────────────────────────────────────────────────
-  return <div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)"}}><FontLoader/>
+  return <ErrorBoundary><div style={{minHeight:"100vh",background:C.bg,backgroundImage:"radial-gradient(ellipse at 0% 0%,rgba(13,148,136,0.13) 0%,transparent 45%),radial-gradient(ellipse at 100% 100%,rgba(2,132,199,0.09) 0%,transparent 40%)"}}><FontLoader/>
       {showWhatsNew&&<WhatsNewModal onDismiss={dismissWhatsNew}/>}
     <nav style={{position:"sticky",top:0,zIndex:100,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"0 20px"}}>
       <div style={{maxWidth:1300,margin:"0 auto",...flex(0,"center","space-between"),height:54}}>
@@ -6297,5 +6347,5 @@ export default function App(){
       }
     </main>
     <FloatingAIHelp role="admin" roofers={roofers} leads={leads} storms={storms} currentSection={activeSection}/>
-  </div>;
+  </div></ErrorBoundary>;
 }
