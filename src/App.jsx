@@ -3134,6 +3134,239 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
 }
 
 // ─── ROOFER DASHBOARD ─────────────────────────────────────────────────────────
+// ─── CALENDAR VIEW ───────────────────────────────────────────────────────────
+function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus}){
+  const today = new Date();
+  const[viewDate,setViewDate]=useState(new Date(today.getFullYear(),today.getMonth(),1));
+  const[selectedDate,setSelectedDate]=useState(null);
+  const[view,setView]=useState("month"); // month | week | list
+  const isMobile=useIsMobile();
+
+  const year  = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+
+  const monthName = viewDate.toLocaleDateString(undefined,{month:"long",year:"numeric"});
+  const firstDay  = new Date(year,month,1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year,month+1,0).getDate();
+
+  // Pad to start on Sunday
+  const cells = [];
+  for(let i=0;i<firstDay;i++) cells.push(null);
+  for(let d=1;d<=daysInMonth;d++) cells.push(d);
+  // Pad to complete last row
+  while(cells.length%7!==0) cells.push(null);
+
+  function dateKey(d){
+    return `${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  }
+  function isToday(d){ return d&&year===today.getFullYear()&&month===today.getMonth()&&d===today.getDate(); }
+  function isSelected(d){ return d&&selectedDate===dateKey(d); }
+  function hasInspections(d){ return d&&groupedIns[dateKey(d)]?.length>0; }
+
+  const selectedInspections = selectedDate ? (groupedIns[selectedDate]||[]) : [];
+
+  // Week view — show 7 days from current week
+  const weekStart = new Date(today);
+  weekStart.setDate(today.getDate()-today.getDay());
+
+  function prevMonth(){ setViewDate(new Date(year,month-1,1)); setSelectedDate(null); }
+  function nextMonth(){ setViewDate(new Date(year,month+1,1)); setSelectedDate(null); }
+
+  // Status color
+  const sColor = s=>INS_STATUS_COLORS[s]||C.orange;
+
+  // Upcoming list — next 30 days
+  const upcoming = Object.entries(groupedIns)
+    .filter(([date])=>date>=today.toISOString().slice(0,10))
+    .sort(([a],[b])=>a.localeCompare(b))
+    .slice(0,20);
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+      {/* Header */}
+      <div style={{...flex(0,"center","space-between"),flexWrap:"wrap",gap:8}}>
+        <div style={flex(8)}>
+          {/* View toggle */}
+          <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+            {["month","list"].map(v=>(
+              <button key={v} onClick={()=>setView(v)} style={{
+                padding:"7px 16px",fontSize:12,fontWeight:600,
+                background:view===v?C.orange:"transparent",
+                color:view===v?"#000":C.textSub,
+                border:"none",cursor:"pointer",textTransform:"capitalize",
+              }}>{v}</button>
+            ))}
+          </div>
+        </div>
+        <Btn variant="primary" onClick={onBook}
+          disabled={(roofer.inspectors||[]).length===0}>
+          + New Appointment
+        </Btn>
+      </div>
+
+      {view==="month"&&<>
+        {/* Month nav */}
+        <div style={card({padding:"14px 16px"})}>
+          <div style={{...flex(0,"center","space-between"),marginBottom:16}}>
+            <button onClick={prevMonth} style={{background:"none",border:`1px solid ${C.border}`,
+              borderRadius:7,width:32,height:32,cursor:"pointer",color:C.text,fontSize:16}}>‹</button>
+            <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:16,fontWeight:700,color:C.text}}>{monthName}</div>
+            <button onClick={nextMonth} style={{background:"none",border:`1px solid ${C.border}`,
+              borderRadius:7,width:32,height:32,cursor:"pointer",color:C.text,fontSize:16}}>›</button>
+          </div>
+
+          {/* Day headers */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",marginBottom:4}}>
+            {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=>(
+              <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:600,
+                color:C.textSub,padding:"4px 0",textTransform:"uppercase",letterSpacing:"0.06em"}}>{d}</div>
+            ))}
+          </div>
+
+          {/* Calendar grid */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+            {cells.map((d,i)=>{
+              const key = d?dateKey(d):null;
+              const insps = d?(groupedIns[key]||[]):[];
+              const todayCell = isToday(d);
+              const selectedCell = isSelected(d);
+              const hasIns = insps.length>0;
+
+              return(
+                <div key={i} onClick={()=>d&&setSelectedDate(selectedCell?null:key)}
+                  style={{
+                    minHeight:isMobile?44:60,
+                    borderRadius:8,
+                    padding:"4px 6px",
+                    cursor:d?"pointer":"default",
+                    background:selectedCell?`${C.orange}22`:todayCell?"rgba(13,148,136,0.15)":"transparent",
+                    border:`1px solid ${selectedCell?C.orange:todayCell?"rgba(13,148,136,0.4)":C.border}`,
+                    transition:"background 0.1s",
+                    position:"relative",
+                  }}
+                  onMouseEnter={e=>{if(d&&!selectedCell&&!todayCell)e.currentTarget.style.background="rgba(255,255,255,0.04)";}}
+                  onMouseLeave={e=>{if(d&&!selectedCell&&!todayCell)e.currentTarget.style.background="transparent";}}>
+                  {d&&<>
+                    <div style={{
+                      fontSize:12,fontWeight:todayCell||selectedCell?700:400,
+                      color:todayCell?C.orange:selectedCell?C.orange:C.text,
+                      marginBottom:2,
+                    }}>{d}</div>
+                    {/* Inspection dots */}
+                    {insps.slice(0,3).map((ins,ii)=>(
+                      <div key={ii} style={{
+                        fontSize:9,fontWeight:500,
+                        color:sColor(ins.status),
+                        background:`${sColor(ins.status)}18`,
+                        borderRadius:3,padding:"1px 4px",
+                        marginBottom:1,
+                        overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
+                        maxWidth:"100%",
+                      }}>{isMobile?"•":ins.client?.split(" ")[0]||"Appt"}</div>
+                    ))}
+                    {insps.length>3&&<div style={{fontSize:9,color:C.textMuted}}>+{insps.length-3} more</div>}
+                  </>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Selected day detail */}
+        {selectedDate&&<div style={card()}>
+          <div style={{...T.head(13,600),marginBottom:12,color:C.orange}}>
+            {new Date(selectedDate+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
+          </div>
+          {selectedInspections.length===0
+            ?<div style={{textAlign:"center",padding:"20px 0",color:C.textMuted,fontSize:13}}>
+                No appointments on this day.
+                <div style={{marginTop:10}}><Btn small variant="primary" onClick={onBook}>+ Add Appointment</Btn></div>
+              </div>
+            :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {selectedInspections.map(ins=>(
+                <div key={ins.id} style={{background:C.surface,borderRadius:10,padding:"12px 14px",
+                  border:`1px solid ${sColor(ins.status)}33`}}>
+                  <div style={{...flex(0,"flex-start","space-between"),flexWrap:"wrap",gap:8}}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:C.text,marginBottom:3}}>
+                        {ins.client}
+                        <Badge label={ins.source==="manual"?"called in":"from lead"} color={ins.source==="manual"?C.purple:C.blue} small/>
+                      </div>
+                      <div style={{fontSize:12,color:C.orange,fontWeight:500,marginBottom:2}}>
+                        {formatTimeLabel(ins.startISO)} – {formatTimeLabel(ins.endISO)}
+                      </div>
+                      <div style={{fontSize:11,color:C.textSub}}>
+                        {ins.inspector}{ins.address?` · ${ins.address}`:""}
+                      </div>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
+                      <select value={ins.status} onChange={e=>onUpdateStatus(ins.id,e.target.value)}
+                        style={{background:C.card,border:`1px solid ${sColor(ins.status)}44`,
+                          borderRadius:6,padding:"4px 8px",color:sColor(ins.status),fontSize:11,cursor:"pointer"}}>
+                        {INSPECTION_STATUSES.map(st=><option key={st} value={st}>{st}</option>)}
+                      </select>
+                      <div style={flex(6)}>
+                        {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>onReschedule(ins)}>↻ Reschedule</Btn>}
+                        <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer">
+                          <Btn small variant="ghost">Google Cal</Btn>
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div style={{textAlign:"right",marginTop:4}}>
+                <Btn small variant="primary" onClick={onBook}>+ Add to This Day</Btn>
+              </div>
+            </div>
+          }
+        </div>}
+      </>}
+
+      {/* List view — upcoming appointments */}
+      {view==="list"&&<div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {upcoming.length===0
+          ?<div style={{...card({textAlign:"center",padding:40,color:C.textMuted,fontSize:13})}}>
+              No upcoming appointments. Click "+ New Appointment" to schedule one.
+            </div>
+          :upcoming.map(([date,insps])=>(
+            <div key={date}>
+              <div style={{fontSize:12,fontWeight:600,color:C.orange,marginBottom:6,paddingLeft:2}}>
+                {new Date(date+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"})}
+              </div>
+              {insps.map(ins=>(
+                <div key={ins.id} style={{...card({marginBottom:6,padding:"12px 14px"}),
+                  border:`1px solid ${sColor(ins.status)}33`}}>
+                  <div style={{...flex(0,"flex-start","space-between"),flexWrap:"wrap",gap:8}}>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:C.text}}>{ins.client}</div>
+                      <div style={{fontSize:12,color:C.orange,marginTop:2}}>
+                        {formatTimeLabel(ins.startISO)} – {formatTimeLabel(ins.endISO)} · {ins.inspector}
+                      </div>
+                      {ins.address&&<div style={{fontSize:11,color:C.textSub,marginTop:1}}>{ins.address}</div>}
+                    </div>
+                    <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                      <select value={ins.status} onChange={e=>onUpdateStatus(ins.id,e.target.value)}
+                        style={{background:C.surface,border:`1px solid ${sColor(ins.status)}44`,
+                          borderRadius:6,padding:"4px 8px",color:sColor(ins.status),fontSize:11,cursor:"pointer"}}>
+                        {INSPECTION_STATUSES.map(st=><option key={st} value={st}>{st}</option>)}
+                      </select>
+                      {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>onReschedule(ins)}>↻</Btn>}
+                      <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer">
+                        <Btn small variant="ghost">GCal</Btn>
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))
+        }
+      </div>}
+    </div>
+  );
+}
+
 function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,addActivity}){
   const isMobile=useIsMobile();
   const[tab,setTab]=useState("Overview");
@@ -3281,36 +3514,13 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
       </TableWrap>
     </div>}
 
-    {tab==="Calendar"&&<div>
-      <div style={{...flex(0,"center","space-between"),marginBottom:14,flexWrap:"wrap",gap:8}}>
-        <div style={{fontSize:12,color:C.textMuted}}>{(roofer.inspectors||[]).length===0?"Add an inspector first to enable scheduling.":`${roofer.inspectors.length} inspector(s) · ${(roofer.scheduleSettings||DEFAULT_SCHEDULE).durationMins}min appointments`}</div>
-        <Btn variant="primary" onClick={()=>setBookingModal({})} disabled={(roofer.inspectors||[]).length===0}>+ New Appointment</Btn>
-      </div>
-      {Object.keys(groupedIns).length===0?<div style={{...card({textAlign:"center",padding:40,color:C.textMuted,fontSize:13})}}>No inspections scheduled. Click "+ New Appointment" to add a walk-in customer or book a lead.</div>:Object.entries(groupedIns).sort().map(([date,insps])=><div key={date} style={{marginBottom:16}}>
-        <div style={{...T.head(12,600),color:C.orange,marginBottom:8}}>{new Date(date+"T12:00:00").toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric"})}</div>
-        {insps.map(ins=><div key={ins.id} style={{...card({marginBottom:8,padding:"14px 16px"})}}>
-          <div style={{...flex(0,"flex-start","space-between"),gap:12,flexWrap:"wrap"}}>
-            <div>
-              <div style={{...flex(6,"center")}}>
-                <div style={{fontSize:13,fontWeight:600}}>{ins.client}</div>
-                <Badge label={ins.source==="manual"?"called in":"from lead"} color={ins.source==="manual"?C.purple:C.blue} small/>
-              </div>
-              <div style={{fontSize:12,color:C.textSub,marginTop:2}}>{ins.address}{ins.phone?` · ${ins.phone}`:""}</div>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
-              <div style={{fontSize:12,color:C.orange,fontWeight:500}}>{formatTimeLabel(ins.startISO)}–{formatTimeLabel(ins.endISO)} · {ins.inspector}</div>
-              <div style={flex(6)}>
-                <select value={ins.status} onChange={e=>onUpdate("update_inspection_status",{rooferId:roofer.id,inspectionId:ins.id,status:e.target.value})} style={{background:C.surface,border:`1px solid ${INS_STATUS_COLORS[ins.status]||C.border}`,borderRadius:5,padding:"3px 8px",color:INS_STATUS_COLORS[ins.status]||C.text,fontSize:11,cursor:"pointer"}}>
-                  {INSPECTION_STATUSES.map(st=><option key={st} value={st}>{st}</option>)}
-                </select>
-                {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>setBookingModal({existingInspection:ins})}>↻ Reschedule</Btn>}
-                <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer"><Btn small variant="ghost">Add to Google Cal</Btn></a>
-              </div>
-            </div>
-          </div>
-        </div>)}
-      </div>)}
-    </div>}
+    {tab==="Calendar"&&<CalendarView
+      roofer={roofer}
+      groupedIns={groupedIns}
+      onBook={()=>setBookingModal({})}
+      onReschedule={ins=>setBookingModal({existingInspection:ins})}
+      onUpdateStatus={(inspectionId,status)=>onUpdate("update_inspection_status",{rooferId:roofer.id,inspectionId,status})}
+    />}
 
     {tab==="Schedule"&&<ScheduleSettingsPanel roofer={roofer} onSave={settings=>onUpdate("update_schedule_settings",{rooferId:roofer.id,settings})}/>}
 
