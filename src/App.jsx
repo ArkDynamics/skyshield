@@ -579,7 +579,7 @@ const SCAN_INTERVALS= [
   {value:"manual",label:"Manual Only"},{value:"daily",label:"Once Daily"},
   {value:"2h",label:"Every 2 Hours"},{value:"1h",label:"Every Hour"},{value:"30m",label:"Every 30 Min"},
 ];
-const INSPECTION_STATUSES   = ["scheduled","completed","no-show","converted","lost"];
+const INSPECTION_STATUSES   = ["scheduled","rescheduled","completed","no-show","converted","lost"];
 
 const PHOTO_CATEGORIES = [
   "Exterior from Ground",
@@ -3243,7 +3243,7 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
 
 // ─── ROOFER DASHBOARD ─────────────────────────────────────────────────────────
 // ─── CALENDAR VIEW ───────────────────────────────────────────────────────────
-function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus}){
+function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus, onDelete}){
   const today = new Date();
   const[viewDate,setViewDate]=useState(new Date(today.getFullYear(),today.getMonth(),1));
   const[selectedDate,setSelectedDate]=useState(null);
@@ -3418,6 +3418,9 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus}
                         <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer">
                           <Btn small variant="ghost">Google Cal</Btn>
                         </a>
+                        <Btn small variant="danger" onClick={()=>{
+                          if(window.confirm(`Delete appointment for ${ins.client}?`)) onDelete(ins.id);
+                        }}>Delete</Btn>
                       </div>
                     </div>
                   </div>
@@ -3463,6 +3466,9 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus}
                       <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer">
                         <Btn small variant="ghost">GCal</Btn>
                       </a>
+                      <Btn small variant="danger" onClick={()=>{
+                        if(window.confirm(`Delete appointment for ${ins.client}?`)) onDelete(ins.id);
+                      }}>Delete</Btn>
                     </div>
                   </div>
                 </div>
@@ -3655,6 +3661,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
       onBook={()=>setBookingModal({})}
       onReschedule={ins=>setBookingModal({existingInspection:ins})}
       onUpdateStatus={(inspectionId,status)=>onUpdate("update_inspection_status",{rooferId:roofer.id,inspectionId,status})}
+      onDelete={inspectionId=>onUpdate("delete_inspection",{rooferId:roofer.id,inspectionId})}
     />}
 
     {tab==="Schedule"&&<ScheduleSettingsPanel roofer={roofer} onSave={settings=>onUpdate("update_schedule_settings",{rooferId:roofer.id,settings})}/>}
@@ -6631,6 +6638,7 @@ export default function App(){
       case "book_lead":setLeads(p=>p.map(l=>l.id===payload.leadId?{...l,status:"scheduled"}:l));setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,booked:r.booked+1,inspections:[...r.inspections,payload.inspection]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,booked:p.booked+1,inspections:[...p.inspections,payload.inspection]}:p);break;
       case "log_revenue":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,revenue:r.revenue+payload.entry.amount,revenueLog:[...(r.revenueLog||[]),payload.entry]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,revenue:p.revenue+payload.entry.amount,revenueLog:[...(p.revenueLog||[]),payload.entry]}:p);break;
       case "update_inspection_status":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:r.inspections.map(i=>i.id===payload.inspectionId?{...i,status:payload.status}:i)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:p.inspections.map(i=>i.id===payload.inspectionId?{...i,status:payload.status}:i)}:p);break;
+      case "delete_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:(r.inspections||[]).filter(i=>i.id!==payload.inspectionId)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:(p.inspections||[]).filter(i=>i.id!==payload.inspectionId)}:p);break;
       case "add_inspector":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspectors:[...r.inspectors,payload.inspector]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspectors:[...p.inspectors,payload.inspector]}:p);break;
       case "add_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:[...r.inspections,payload.inspection]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:[...p.inspections,payload.inspection]}:p);break;
       case "reschedule_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:r.inspections.map(i=>i.id===payload.inspection.id?{...i,...payload.inspection}:i)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:p.inspections.map(i=>i.id===payload.inspection.id?{...i,...payload.inspection}:i)}:p);break;
