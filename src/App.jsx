@@ -936,39 +936,64 @@ async function callClaude(messages,system="",max_tokens=1200){
 // gate, not a suggestion — the prompt instructs Claude to refuse to schedule
 // until that confirmation is obtained, and the app double-checks lead.adultConfirmed
 // before ever actually booking a slot.
-async function generateLeadReply(lead,roofer,conversationHistory){
-  const comm=roofer.commSettings||DEFAULT_COMM;
-  const requireAdult=comm.requireAdultPresent!==false;
-  const adultStatus=lead.adultConfirmed||"unconfirmed";
+async function generateLeadReply(lead, roofer, conversationHistory, availableSlots=[]){
+  const comm = roofer.commSettings || DEFAULT_COMM;
+  const requireAdult = comm.requireAdultPresent !== false;
+  const adultStatus = lead.adultConfirmed || "unconfirmed";
 
-  const sys=`You are an SMS scheduling assistant texting on behalf of ${roofer.name}, a roofing company, with a potential customer named ${lead.homeowner} whose home in ZIP ${lead.zip} was affected by a ${lead.stormType} storm.
+  // Format slots for the AI to use in the message
+  const slotLines = availableSlots.slice(0,3).map((s,i)=>`Option ${i+1}: ${formatDateLabel(s.startISO)} at ${formatTimeLabel(s.startISO)}`).join("\n");
 
-Your job: build rapport, confirm interest in a free roof inspection, and move toward booking an appointment.
+  const sys = `You are an SMS scheduling assistant texting on behalf of ${roofer.name}, a roofing company, with a potential customer named ${lead.homeowner} whose home in ZIP ${lead.zip} was affected by a ${lead.stormType} storm.
 
-${requireAdult?`CRITICAL SAFETY RULE — NON-NEGOTIABLE: Before you may offer or confirm ANY appointment time, you must first get an explicit, unambiguous "yes" that someone 18 years or older will be present at the home during the inspection. Do not skip, soften, or assume this. If the homeowner has not yet confirmed this and the conversation is moving toward scheduling, your NEXT message must ask this directly (you can use natural phrasing, e.g. "${comm.templates.adultCheck||"Will someone 18 or older be home during the inspection?"}"). If they say no or refuse to answer, do not schedule — politely explain that an adult needs to be present for the inspection and ask them to let you know when that's possible. Current adult-confirmation status for this lead: ${adultStatus}.`:""}
+Your job: build rapport, confirm interest in a free roof inspection, and BOOK THE APPOINTMENT directly in this conversation — do not defer to a human.
 
-Keep replies short (SMS-length, under 300 characters), warm, and conversational — not robotic or formal. Never make up specific appointment times yourself; that's handled separately by the app once adult presence is confirmed.
+${requireAdult ? `ADULT PRESENCE RULE: Before offering any appointment time, you must confirm someone 18+ will be home. Ask naturally. If they say no, explain an adult must be present and ask when that works. Current status: ${adultStatus}.` : ""}
 
-Respond with ONLY a JSON object, no other text, in this exact shape:
-{"reply":"the SMS text to send","adultConfirmed":"confirmed"|"denied"|"unconfirmed","readyToSchedule":true|false,"needsHumanReview":true|false}
+SCHEDULING FLOW:
+1. If the homeowner shows interest → offer the available time slots below (pick up to 3)
+2. If they pick a slot (e.g. "Option 1", "Monday works", "2pm", etc.) → confirm the booking, set bookedSlotIndex to 0/1/2 matching their choice
+3. If they want a different time → ask for their preference and set wantsCustomTime:true
+4. Once booked → send a clear confirmation message with date, time, and inspector name
 
-Set adultConfirmed to "confirmed" only on an explicit yes. Set it to "denied" if they say no or refuse. Otherwise leave it "unconfirmed". Set readyToSchedule to true ONLY if adultConfirmed is "confirmed" AND the homeowner has clearly agreed to be scheduled. Set needsHumanReview to true if the homeowner asks something you can't safely answer (pricing specifics, complaints, anything adversarial, or repeated refusal).`;
+AVAILABLE SLOTS:
+${slotLines || "No slots currently available — ask for their preferred time"}
 
-  const messages=(conversationHistory||[]).map(c=>({role:c.role==="lead"?"user":"assistant",content:c.msg}));
+RESPONSE FORMAT — reply ONLY with valid JSON, no other text:
+{
+  "reply": "the SMS text to send (under 300 chars, warm and conversational)",
+  "adultConfirmed": "confirmed" | "denied" | "unconfirmed",
+  "readyToSchedule": true | false,
+  "bookedSlotIndex": null | 0 | 1 | 2,
+  "wantsCustomTime": false | true,
+  "preferredTime": null | "string describing what they asked for",
+  "needsHumanReview": false | true
+}
 
-  const raw=await callClaude(messages,sys,400);
+Set bookedSlotIndex ONLY when the homeowner has clearly chosen one of the offered slots.
+Set readyToSchedule true when adult is confirmed AND they've agreed to an inspection.
+Keep messages under 300 characters. Be warm, not robotic.`;
+
+  const messages = (conversationHistory||[]).map(c=>({
+    role: c.role==="lead" ? "user" : "assistant",
+    content: c.msg,
+  }));
+
+  const raw = await callClaude(messages, sys, 500);
   try{
-    const cleaned=raw.replace(/```json|```/g,"").trim();
-    const parsed=JSON.parse(cleaned);
+    const cleaned = raw.replace(/```json|```/g,"").trim();
+    const parsed = JSON.parse(cleaned);
     return {
-      reply: parsed.reply || "Thanks for the reply — someone from our team will follow up shortly!",
+      reply: parsed.reply || "Thanks! Someone will follow up shortly.",
       adultConfirmed: ["confirmed","denied","unconfirmed"].includes(parsed.adultConfirmed) ? parsed.adultConfirmed : adultStatus,
       readyToSchedule: !!parsed.readyToSchedule,
+      bookedSlotIndex: parsed.bookedSlotIndex ?? null,
+      wantsCustomTime: !!parsed.wantsCustomTime,
+      preferredTime: parsed.preferredTime || null,
       needsHumanReview: !!parsed.needsHumanReview,
     };
   }catch(e){
-    // If parsing fails, fail safe: don't schedule, flag for a human.
-    return { reply: raw.slice(0,300), adultConfirmed: adultStatus, readyToSchedule:false, needsHumanReview:true };
+    return { reply: raw.slice(0,300), adultConfirmed: adultStatus, readyToSchedule:false, bookedSlotIndex:null, wantsCustomTime:false, needsHumanReview:true };
   }
 }
 
@@ -4087,37 +4112,58 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
         const comm=roofer?.commSettings||DEFAULT_COMM;
         if(roofer&&comm.aiAutoReply){
           try{
-            const history=[...lead.conversations,{role:"lead",msg:m.body,ts:m.date_sent}];
-            const result=await generateLeadReply(lead,roofer,history);
+            // Get available slots to pass to the AI
+            const inspector=(roofer.inspectors||[]).find(i=>(i.zones||[]).includes(lead.zip))||(roofer.inspectors||[])[0];
+            const availableSlots = inspector ? getNextAvailableSlots(roofer,inspector.id,{limit:3}) : [];
 
+            const history=[...lead.conversations,{role:"lead",msg:m.body,ts:m.date_sent}];
+            const result=await generateLeadReply(lead,roofer,history,availableSlots);
+
+            // Update adult confirmation status
             if(result.adultConfirmed!==(lead.adultConfirmed||"unconfirmed")){
               onUpdate("update_adult_confirmed",{leadId:lead.id,status:result.adultConfirmed});
-              if(result.adultConfirmed==="confirmed") addActivity({type:"system",message:`${lead.homeowner} confirmed an adult will be present for the inspection`,badge:"verified",badgeColor:C.green});
+              if(result.adultConfirmed==="confirmed") addActivity({type:"system",message:`${lead.homeowner} confirmed an adult will be present`,badge:"verified",badgeColor:C.green});
               if(result.adultConfirmed==="denied") addActivity({type:"system",message:`${lead.homeowner} indicated no adult will be present — booking paused`,badge:"blocked",badgeColor:C.red});
             }
 
+            // Send the AI reply
             if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,result.reply,roofer.twilioFrom);
             onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg:result.reply,ts:new Date().toLocaleString()}});
 
-            // Only ever auto-book once the adult-presence gate is actually satisfied.
+            // Book directly if the homeowner selected a slot
             const requireAdult=comm.requireAdultPresent!==false;
             const gateOk=!requireAdult||result.adultConfirmed==="confirmed";
-            if(result.readyToSchedule&&gateOk&&lead.status!=="scheduled"){
-              const inspector=(roofer.inspectors||[]).find(i=>(i.zones||[]).includes(lead.zip))||(roofer.inspectors||[])[0];
-              const nextSlot=inspector?getNextAvailableSlots(roofer,inspector.id,{limit:1})[0]:null;
-              if(inspector&&nextSlot){
-                const ins={id:"ins"+Date.now(),client:lead.homeowner,address:(lead.address?`${lead.address}, ${lead.zip}`:lead.zip),phone:lead.phone,startISO:nextSlot.startISO,endISO:nextSlot.endISO,inspectorId:inspector.id,inspector:inspector.name,status:"scheduled",source:"lead",leadId:lead.id};
+
+            if(result.bookedSlotIndex!==null&&result.bookedSlotIndex!==undefined&&gateOk&&lead.status!=="scheduled"){
+              const slot = availableSlots[result.bookedSlotIndex] || availableSlots[0];
+              if(slot&&inspector){
+                const ins={
+                  id:"ins"+Date.now(),
+                  client:lead.homeowner,
+                  address:(lead.address?`${lead.address}, ${lead.zip}`:lead.zip),
+                  phone:lead.phone,
+                  startISO:slot.startISO,endISO:slot.endISO,
+                  inspectorId:inspector.id,inspector:inspector.name,
+                  status:"scheduled",source:"lead",leadId:lead.id,
+                };
                 onUpdate("book_lead",{leadId:lead.id,rooferId:roofer.id,inspection:ins});
-                const bookMsg=fillTemplate(comm.templates.booking,{name:lead.homeowner,date:formatDateLabel(nextSlot.startISO),time:formatTimeLabel(nextSlot.startISO),inspector:inspector.name,company:roofer.name});
-                if(apiKeys.twilio?.sid) await sendTwilioSMS(apiKeys.twilio,lead.phone,bookMsg,roofer.twilioFrom);
-                onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg:bookMsg,ts:new Date().toLocaleString()}});
-                onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"booking",message:`AI booked: ${lead.homeowner} on ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)} (adult presence confirmed)`,smsText:`SkyShield Pro: AI booked an inspection — ${lead.homeowner} on ${formatDateLabel(nextSlot.startISO)} at ${formatTimeLabel(nextSlot.startISO)}. Adult presence confirmed.`}});
-                addActivity({type:"booking",message:`AI auto-booked ${lead.homeowner} — adult presence confirmed`,badge:"auto-booked",badgeColor:C.purple});
+                onUpdate("notify_roofer",{rooferId:roofer.id,notification:{
+                  type:"booking",
+                  message:`AI booked: ${lead.homeowner} on ${formatDateLabel(slot.startISO)} at ${formatTimeLabel(slot.startISO)}`,
+                  smsText:`SkyShield: ${lead.homeowner} booked for ${formatDateLabel(slot.startISO)} at ${formatTimeLabel(slot.startISO)} with ${inspector.name}.`,
+                }});
+                addActivity({type:"booking",message:`AI booked ${lead.homeowner} — ${formatDateLabel(slot.startISO)} at ${formatTimeLabel(slot.startISO)}`,badge:"booked",badgeColor:C.purple});
               }
+            } else if(result.readyToSchedule&&gateOk&&lead.status!=="scheduled"&&result.bookedSlotIndex===null&&!result.wantsCustomTime){
+              // They're ready but haven't picked yet — slots were offered in the reply, wait for selection
+            } else if(result.wantsCustomTime&&result.preferredTime){
+              // They want a different time — flag for follow-up
+              onUpdate("update_lead_notes",{leadId:lead.id,notes:((lead.notes||"")+` | Homeowner prefers: ${result.preferredTime}`).trim()});
+              addActivity({type:"system",message:`${lead.homeowner} requested custom time: ${result.preferredTime}`,badge:"custom time",badgeColor:C.yellow});
             }
 
             if(result.needsHumanReview){
-              onUpdate("update_lead_notes",{leadId:lead.id,notes:((lead.notes||"")+" ⚠ AI flagged this conversation for human review.").trim()});
+              onUpdate("update_lead_notes",{leadId:lead.id,notes:((lead.notes||"")+" ⚠ Flagged for human review.").trim()});
               addActivity({type:"system",message:`${lead.homeowner}'s conversation flagged for human review`,badge:"review",badgeColor:C.yellow});
             }
           }catch(e){ console.error("AI auto-reply failed:",e); }
