@@ -3243,7 +3243,7 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
 
 // ─── ROOFER DASHBOARD ─────────────────────────────────────────────────────────
 // ─── CALENDAR VIEW ───────────────────────────────────────────────────────────
-function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus, onDelete}){
+function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus, onDelete, leads}){
   const today = new Date();
   const[viewDate,setViewDate]=useState(new Date(today.getFullYear(),today.getMonth(),1));
   const[selectedDate,setSelectedDate]=useState(null);
@@ -3414,7 +3414,11 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
                         {INSPECTION_STATUSES.map(st=><option key={st} value={st}>{st}</option>)}
                       </select>
                       <div style={flex(6)}>
-                        {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>onReschedule(ins)}>↻ Reschedule</Btn>}
+                        {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>{
+                          // Enrich with phone from lead if available
+                          const lead=(leads||[]).find(l=>l.id===ins.leadId);
+                          onReschedule({...ins,phone:ins.phone||lead?.phone||""});
+                        }}>↻ Reschedule</Btn>}
                         <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer">
                           <Btn small variant="ghost">Google Cal</Btn>
                         </a>
@@ -3462,7 +3466,10 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
                           borderRadius:6,padding:"4px 8px",color:sColor(ins.status),fontSize:11,cursor:"pointer"}}>
                         {INSPECTION_STATUSES.map(st=><option key={st} value={st}>{st}</option>)}
                       </select>
-                      {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>onReschedule(ins)}>↻</Btn>}
+                      {ins.status==="scheduled"&&<Btn small variant="ghost" onClick={()=>{
+                        const lead=(leads||[]).find(l=>l.id===ins.leadId);
+                        onReschedule({...ins,phone:ins.phone||lead?.phone||""});
+                      }}>↻</Btn>}
                       <a href={googleCalendarLink(ins,roofer)} target="_blank" rel="noreferrer">
                         <Btn small variant="ghost">GCal</Btn>
                       </a>
@@ -3555,10 +3562,16 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
         addActivity({type:"booking",message:`Inspection booked for ${ins.client} — ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}`,badge:"scheduled",badgeColor:C.green});
         onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"booking",message:`New appointment: ${ins.client} on ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)} with ${ins.inspector}`,smsText:`SkyShield Pro: New appointment booked — ${ins.client} on ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)} with ${ins.inspector}.`}});
       }}
-      onReschedule={ins=>{
-        onUpdate("reschedule_inspection",{rooferId:roofer.id,inspection:ins});
+      onReschedule={async ins=>{
+        onUpdate("reschedule_inspection",{rooferId:roofer.id,inspection:{...ins,status:"rescheduled"}});
         addActivity({type:"booking",message:`${ins.client}'s inspection moved to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}`,badge:"rescheduled",badgeColor:C.yellow});
         onUpdate("notify_roofer",{rooferId:roofer.id,notification:{type:"reschedule",message:`Rescheduled: ${ins.client} moved to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}`,smsText:`SkyShield Pro: ${ins.client}'s inspection was moved to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)}.`}});
+        // SMS the homeowner to let them know their appointment changed
+        if(apiKeys.twilio?.sid&&ins.phone){
+          const msg=`Hi ${ins.client.split(" ")[0]}, your roof inspection has been rescheduled to ${formatDateLabel(ins.startISO)} at ${formatTimeLabel(ins.startISO)} with ${ins.inspector}. Reply STOP to opt out.`;
+          await sendTwilioSMS(apiKeys.twilio, ins.phone, msg, roofer.twilioFrom);
+          if(ins.leadId) onUpdate("add_conversation",{leadId:ins.leadId,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
+        }
       }}/>}
     {editingLead&&<EditLeadModal lead={editingLead} roofers={[roofer]} onClose={()=>setEditingLead(null)} onSave={l=>onUpdate("edit_lead",{lead:l})}/>}
     {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofer} storms={[]} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
@@ -3658,6 +3671,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
     {tab==="Calendar"&&<CalendarView
       roofer={roofer}
       groupedIns={groupedIns}
+      leads={leads}
       onBook={()=>setBookingModal({})}
       onReschedule={ins=>setBookingModal({existingInspection:ins})}
       onUpdateStatus={(inspectionId,status)=>onUpdate("update_inspection_status",{rooferId:roofer.id,inspectionId,status})}
