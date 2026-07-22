@@ -580,6 +580,21 @@ const SCAN_INTERVALS= [
   {value:"2h",label:"Every 2 Hours"},{value:"1h",label:"Every Hour"},{value:"30m",label:"Every 30 Min"},
 ];
 const INSPECTION_STATUSES   = ["scheduled","completed","no-show","converted","lost"];
+
+const PHOTO_CATEGORIES = [
+  "Exterior from Ground",
+  "Gutters",
+  "Downspouts",
+  "Window Screens",
+  "Roof Pitch",
+  "Roof Valley",
+  "Roof Fixture (Pipe Boot, Vents, etc.)",
+  "North Slope",
+  "South Slope",
+  "East Slope",
+  "West Slope",
+  "Custom",
+];
 const INS_STATUS_COLORS     = {scheduled:C.blue,completed:C.green,"no-show":C.yellow,converted:C.purple,lost:C.red};
 
 // Default operating hours + appointment settings for a roofer's scheduling calendar.
@@ -1372,12 +1387,49 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
   // Find storms that match this lead's ZIP
   const relatedStorms=(storms||[]).filter(s=>s.zip===lead.zip);
 
+  // Show Street View for booked+ leads that have an address
+  const BOOKED_STAGES = ["scheduled","won","contacted"];
+  const showStreetView = BOOKED_STAGES.includes(lead.status) && lead.address && lead.zip;
+
+  // Google Street View Static API — no key needed for embed URL
+  const streetViewUrl = showStreetView
+    ? `https://maps.googleapis.com/maps/api/streetview?size=600x200&location=${encodeURIComponent(`${lead.address}, ${lead.zip}`)}&fov=90&pitch=0&key=YOUR_GOOGLE_MAPS_KEY`
+    : null;
+
+  // Fallback: use Google Maps embed (no API key needed)
+  const mapsEmbedUrl = showStreetView
+    ? `https://www.google.com/maps/embed/v1/streetview?key=YOUR_GOOGLE_MAPS_KEY&location=${encodeURIComponent(`${lead.address}, ${lead.zip}`)}&fov=90`
+    : null;
+
   return <Modal title={`${lead.homeowner} — ${lead.phone}`} onClose={onClose} wide>
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{...flex(12,"center","space-between"),padding:"8px 12px",background:C.surface,borderRadius:7,flexWrap:"wrap",gap:6}}>
         <div style={flex(12)}><span style={{fontSize:12,color:C.textSub}}>{lead.address?`${lead.address}, `:""}ZIP {lead.zip}</span><span style={{fontSize:12,color:C.textSub}}>⛈ {lead.stormType}</span></div>
         <div style={flex(6)}><StatusBadge status={lead.status}/><AdultBadge status={lead.adultConfirmed}/></div>
       </div>
+
+      {/* Google Street View — only for booked/won/contacted leads with address */}
+      {showStreetView&&<div style={{borderRadius:10,overflow:"hidden",border:`1px solid ${C.border}`,position:"relative"}}>
+        <div style={{fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",
+          letterSpacing:"0.07em",padding:"6px 10px",background:C.surface,
+          borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:6}}>
+          <span>◆</span> Property — {lead.address}, {lead.zip}
+          <a href={`https://www.google.com/maps/search/${encodeURIComponent(`${lead.address}, ${lead.zip}`)}`}
+            target="_blank" rel="noreferrer"
+            style={{marginLeft:"auto",fontSize:10,color:C.orange,textDecoration:"none"}}>
+            Open in Maps →
+          </a>
+        </div>
+        <iframe
+          title="Street View"
+          width="100%"
+          height="200"
+          style={{display:"block",border:"none"}}
+          loading="lazy"
+          allowFullScreen
+          src={`https://www.google.com/maps/embed/v1/streetview?key=AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY&location=${encodeURIComponent(`${lead.address}, ${lead.zip}`)}&fov=80&pitch=0`}
+        />
+      </div>}
 
       {/* Storm context for this ZIP */}
       {relatedStorms.length>0&&<div style={{background:`${C.orange}08`,border:`1px solid ${C.orange}22`,borderRadius:8,padding:"10px 14px"}}>
@@ -5308,6 +5360,166 @@ function InvoiceModal({job, estimate, invoice, onSave, onClose}){
 }
 
 // ── JOB CARD ──────────────────────────────────────────────────────────────────
+// ── PHOTO GALLERY ─────────────────────────────────────────────────────────────
+function PhotoGallery({job, onUpdate}){
+  const[activeCategory,setActiveCategory]=useState("All");
+  const[lightbox,setLightbox]=useState(null);
+  const[uploadCategory,setUploadCategory]=useState(PHOTO_CATEGORIES[0]);
+  const[customCategory,setCustomCategory]=useState("");
+  const[addingCustom,setAddingCustom]=useState(false);
+  const photos = job.photos||[];
+
+  const usedCategories = ["All",...[...new Set(photos.map(p=>p.category||"Uncategorized"))]];
+  const filtered = activeCategory==="All" ? photos : photos.filter(p=>(p.category||"Uncategorized")===activeCategory);
+
+  async function handleUpload(files, category){
+    const newPhotos = await Promise.all(Array.from(files).map(f=>new Promise(res=>{
+      const reader = new FileReader();
+      reader.onload = ev=>res({
+        id:"ph"+Date.now()+Math.random(),
+        url:ev.target.result,
+        name:f.name,
+        uploadedAt:new Date().toLocaleDateString(),
+        category,
+      });
+      reader.readAsDataURL(f);
+    })));
+    onUpdate("update_job",{job:{...job,photos:[...photos,...newPhotos]}});
+  }
+
+  function deletePhoto(id){
+    onUpdate("update_job",{job:{...job,photos:photos.filter(p=>p.id!==id)}});
+    if(lightbox?.id===id) setLightbox(null);
+  }
+
+  const effectiveCategory = uploadCategory==="Custom" ? (customCategory||"Custom") : uploadCategory;
+
+  return(
+    <div>
+      <div style={{...flex(0,"center","space-between"),marginBottom:10}}>
+        <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em"}}>
+          Photos ({photos.length})
+        </div>
+        <div style={flex(8)}>
+          <select value={uploadCategory} onChange={e=>{
+            if(e.target.value==="Custom") setAddingCustom(true);
+            else{ setUploadCategory(e.target.value); setAddingCustom(false); }
+          }} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+            padding:"5px 8px",color:C.text,fontSize:11,cursor:"pointer",maxWidth:180}}>
+            {PHOTO_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+          <label style={{cursor:"pointer"}}>
+            <Btn small variant="primary" onClick={()=>{}}>+ Upload</Btn>
+            <input type="file" accept="image/*" multiple style={{display:"none"}}
+              onChange={e=>handleUpload(e.target.files, effectiveCategory)}/>
+          </label>
+        </div>
+      </div>
+
+      {/* Custom category input */}
+      {addingCustom&&<div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center"}}>
+        <input value={customCategory} onChange={e=>setCustomCategory(e.target.value)}
+          placeholder="Enter custom category name..."
+          style={{flex:1,background:C.surface,border:`1px solid ${C.orange}55`,borderRadius:6,
+            padding:"6px 10px",color:C.text,fontSize:12,outline:"none"}}/>
+        <Btn small variant="primary" onClick={()=>{
+          if(customCategory.trim()){ setUploadCategory("Custom"); setAddingCustom(false); }
+        }}>Set</Btn>
+        <Btn small onClick={()=>{setAddingCustom(false);setUploadCategory(PHOTO_CATEGORIES[0]);}}>Cancel</Btn>
+      </div>}
+      {uploadCategory==="Custom"&&customCategory&&<div style={{fontSize:11,color:C.orange,marginBottom:8}}>
+        Uploading to: <strong>{customCategory}</strong>
+      </div>}
+
+      {photos.length===0
+        ?<div style={{fontSize:12,color:C.textMuted,fontStyle:"italic",padding:"8px 0"}}>
+            No photos yet. Select a category above and upload inspection photos.
+          </div>
+        :<>
+          {/* Category filter chips */}
+          {usedCategories.length>2&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10}}>
+            {usedCategories.map(cat=>(
+              <button key={cat} onClick={()=>setActiveCategory(cat)} style={{
+                fontSize:10,fontWeight:600,padding:"4px 10px",borderRadius:20,border:"none",cursor:"pointer",
+                background:activeCategory===cat?C.orange:`${C.orange}12`,
+                color:activeCategory===cat?"#000":C.orange,whiteSpace:"nowrap",
+              }}>
+                {cat}{cat!=="All"?` (${photos.filter(p=>(p.category||"Uncategorized")===cat).length})`:""}
+              </button>
+            ))}
+          </div>}
+
+          {/* Photos grouped by category when showing All */}
+          {activeCategory==="All"
+            ?[
+                ...PHOTO_CATEGORIES,
+                ...[...new Set(photos.map(p=>p.category||"Uncategorized"))].filter(c=>!PHOTO_CATEGORIES.includes(c))
+              ].map(cat=>{
+                const catPhotos = photos.filter(p=>(p.category||"Uncategorized")===cat);
+                if(!catPhotos.length) return null;
+                return(
+                  <div key={cat} style={{marginBottom:14}}>
+                    <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",
+                      letterSpacing:"0.06em",marginBottom:6,paddingBottom:4,
+                      borderBottom:`1px solid ${C.border}`}}>{cat} ({catPhotos.length})</div>
+                    <PhotoGrid photos={catPhotos} onView={setLightbox} onDelete={deletePhoto}/>
+                  </div>
+                );
+              })
+            :<PhotoGrid photos={filtered} onView={setLightbox} onDelete={deletePhoto}/>
+          }
+        </>
+      }
+
+      {/* Lightbox */}
+      {lightbox&&<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.93)",zIndex:9999,
+        display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20}}
+        onClick={()=>setLightbox(null)}>
+        <div onClick={e=>e.stopPropagation()} style={{maxWidth:"90vw",position:"relative"}}>
+          <img src={lightbox.url} alt={lightbox.name}
+            style={{maxWidth:"100%",maxHeight:"75vh",objectFit:"contain",borderRadius:8,display:"block"}}/>
+          <div style={{marginTop:10,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+            <div>
+              <div style={{fontSize:13,fontWeight:600,color:"#fff"}}>{lightbox.category||"Uncategorized"}</div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.45)"}}>{lightbox.name} · {lightbox.uploadedAt}</div>
+            </div>
+            <div style={flex(6)}>
+              <Btn small variant="danger" onClick={()=>deletePhoto(lightbox.id)}>Delete</Btn>
+              <button onClick={()=>setLightbox(null)} style={{background:"none",
+                border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,
+                padding:"5px 14px",color:"#fff",cursor:"pointer",fontSize:12}}>✕ Close</button>
+            </div>
+          </div>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+function PhotoGrid({photos, onView, onDelete}){
+  return(
+    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+      {photos.map(ph=>(
+        <div key={ph.id} style={{position:"relative",cursor:"pointer"}} onClick={()=>onView(ph)}>
+          <img src={ph.url} alt={ph.name}
+            style={{width:80,height:80,objectFit:"cover",borderRadius:8,
+              border:`1px solid ${C.border}`,display:"block"}}/>
+          <button onClick={e=>{e.stopPropagation();onDelete(ph.id);}}
+            style={{position:"absolute",top:-6,right:-6,width:18,height:18,borderRadius:"50%",
+              background:C.red,border:"none",cursor:"pointer",color:"#fff",
+              fontSize:10,lineHeight:"18px",textAlign:"center",zIndex:1}}>✕</button>
+          <div style={{position:"absolute",bottom:0,left:0,right:0,
+            background:"rgba(0,0,0,0.65)",borderRadius:"0 0 8px 8px",
+            padding:"2px 4px",fontSize:8,color:"#fff",textAlign:"center",
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            {ph.category||"Uncategorized"}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function JobCard({job, estimates, invoices, roofers, onUpdate, onOpenEstimate, onOpenInvoice}){
   const[expanded,setExpanded]=useState(false);
   const[editingInsurance,setEditingInsurance]=useState(false);
@@ -5418,39 +5630,8 @@ function JobCard({job, estimates, invoices, roofers, onUpdate, onOpenEstimate, o
           }
         </div>
 
-        {/* Photos */}
-        <div>
-          <div style={{...flex(0,"center","space-between"),marginBottom:8}}>
-            <div style={{fontSize:12,fontWeight:600,color:C.textSub,textTransform:"uppercase"}}>
-              Photos ({(job.photos||[]).length})
-            </div>
-            <label style={{cursor:"pointer"}}>
-              <Btn small variant="ghost" onClick={()=>{}}>+ Add Photo</Btn>
-              <input type="file" accept="image/*" multiple style={{display:"none"}} onChange={async e=>{
-                const files=Array.from(e.target.files);
-                const newPhotos=await Promise.all(files.map(f=>new Promise(res=>{
-                  const reader=new FileReader();
-                  reader.onload=ev=>res({id:"ph"+Date.now()+Math.random(),url:ev.target.result,name:f.name,uploadedAt:new Date().toLocaleDateString(),category:"damage"});
-                  reader.readAsDataURL(f);
-                })));
-                onUpdate("update_job",{job:{...job,photos:[...(job.photos||[]),...newPhotos]}});
-              }}/>
-            </label>
-          </div>
-          {(job.photos||[]).length===0
-            ?<div style={{fontSize:12,color:C.textMuted,fontStyle:"italic"}}>No photos yet — add photos from the inspection.</div>
-            :<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {(job.photos||[]).map(ph=>(
-                <div key={ph.id} style={{position:"relative"}}>
-                  <img src={ph.url} alt={ph.name} style={{width:72,height:72,objectFit:"cover",borderRadius:8,border:`1px solid ${C.border}`}}/>
-                  <button onClick={()=>onUpdate("update_job",{job:{...job,photos:(job.photos||[]).filter(p=>p.id!==ph.id)}})}
-                    style={{position:"absolute",top:-6,right:-6,width:18,height:18,borderRadius:"50%",
-                      background:C.red,border:"none",cursor:"pointer",color:"#fff",fontSize:10,lineHeight:"18px",textAlign:"center"}}>✕</button>
-                </div>
-              ))}
-            </div>
-          }
-        </div>
+        {/* Photos — categorized */}
+        <PhotoGallery job={job} onUpdate={onUpdate}/>
 
         {/* Tasks */}
         <div>
