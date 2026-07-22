@@ -1048,6 +1048,7 @@ function NotificationBell({roofer,onMarkRead}){
   const[open,setOpen]=useState(false);
   const notifications=roofer.notifications||[];
   const unreadCount=(notifications||[]).filter(n=>!n.read).length;
+  const priorityCount=(notifications||[]).filter(n=>!n.read&&n.priority).length;
   const ref=useRef(null);
 
   useEffect(()=>{
@@ -1063,17 +1064,35 @@ function NotificationBell({roofer,onMarkRead}){
   }
 
   return <div ref={ref} style={{position:"relative"}}>
-    <button onClick={toggle} style={{background:"none",border:"none",cursor:"pointer",position:"relative",padding:"6px",fontSize:18,lineHeight:1,color:C.textSub}}>
-      ◉
-      {unreadCount>0&&<span style={{position:"absolute",top:0,right:0,background:C.red,color:"#fff",borderRadius:"50%",minWidth:16,height:16,fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,padding:"0 3px"}}>{unreadCount>9?"9+":unreadCount}</span>}
+    <button onClick={toggle} style={{background:"none",border:"none",cursor:"pointer",position:"relative",padding:"6px",fontSize:18,lineHeight:1,color:priorityCount>0?C.red:C.textSub}}>
+      {priorityCount>0?"🔴":"◉"}
+      {unreadCount>0&&<span style={{position:"absolute",top:0,right:0,
+        background:priorityCount>0?C.red:C.orange,
+        color:"#fff",borderRadius:"50%",minWidth:16,height:16,fontSize:10,
+        display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,padding:"0 3px"}}>
+        {unreadCount>9?"9+":unreadCount}
+      </span>}
     </button>
-    {open&&<div style={{position:"absolute",top:"calc(100% + 8px)",right:0,width:320,maxHeight:380,overflowY:"auto",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 16px 40px rgba(0,0,0,0.5)",zIndex:200}}>
-      <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:600,color:C.text}}>Notifications</div>
+    {open&&<div style={{position:"absolute",top:"calc(100% + 8px)",right:0,width:340,maxHeight:400,overflowY:"auto",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 16px 40px rgba(0,0,0,0.5)",zIndex:200}}>
+      <div style={{padding:"12px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span style={{fontSize:13,fontWeight:600,color:C.text}}>Notifications</span>
+        {priorityCount>0&&<span style={{fontSize:11,fontWeight:700,color:C.red,background:`${C.red}14`,
+          border:`1px solid ${C.red}33`,borderRadius:6,padding:"2px 8px"}}>
+          {priorityCount} need response
+        </span>}
+      </div>
       {notifications.length===0
         ?<div style={{padding:24,textAlign:"center",fontSize:12,color:C.textMuted}}>No notifications yet.</div>
         :(notifications||[]).map(n=>
-          <div key={n.id} style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,background:n.read?"transparent":C.orangeDim}}>
-            <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{n.message}</div>
+          <div key={n.id} style={{
+            padding:"10px 14px",borderBottom:`1px solid ${C.border}`,
+            background:n.priority&&!n.read?`${C.red}10`:n.read?"transparent":C.orangeDim,
+            borderLeft:n.priority?`3px solid ${C.red}`:"3px solid transparent",
+          }}>
+            {n.priority&&<div style={{fontSize:10,fontWeight:700,color:C.red,textTransform:"uppercase",
+              letterSpacing:"0.07em",marginBottom:3}}>⚠ Action Required</div>}
+            <div style={{fontSize:12,color:n.priority?C.text:C.text,lineHeight:1.5,fontWeight:n.priority?600:400}}>{n.message}</div>
+            {n.leadName&&<div style={{fontSize:11,color:C.orange,marginTop:2}}>Lead: {n.leadName}</div>}
             <div style={{fontSize:10,color:C.textMuted,marginTop:3}}>{n.ts}</div>
           </div>
         )}
@@ -3188,8 +3207,13 @@ function AdultBadge({status}){
 function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRevenue,showRoofer}){
   const roofer=roofers.find(r=>r.id===lead.rooferId);
   const unread=(lead.conversations||[]).filter(c=>c.role==="lead").length;
-  return <TR>
-    <TD bold sub={lead.address||(lead.notes?"↳ "+lead.notes.slice(0,40):undefined)}>{lead.homeowner}</TD>
+  const needsReview=lead.notes&&lead.notes.includes("⚠ Flagged for human review");
+  return <TR style={needsReview?{background:`${C.red}08`,borderLeft:`3px solid ${C.red}`}:{}}>
+    <TD bold sub={lead.address||(lead.notes?"↳ "+lead.notes.slice(0,40):undefined)}>
+      {needsReview&&<span style={{fontSize:9,fontWeight:700,color:C.red,background:`${C.red}15`,
+        borderRadius:4,padding:"1px 5px",marginRight:5,verticalAlign:"middle"}}>⚠ REPLY</span>}
+      {lead.homeowner}
+    </TD>
     <TD dim>{lead.phone}</TD>
     <TD>{lead.zip}</TD>
     {showRoofer&&<TD dim>{roofer?.name||"—"}</TD>}
@@ -3197,8 +3221,15 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
     <TD><div style={{display:"flex",gap:4,flexWrap:"wrap"}}><StatusBadge status={lead.status}/><AdultBadge status={lead.adultConfirmed}/></div></TD>
     <TD nowrap>
       <div style={{...flex(4),flexWrap:"wrap"}}>
-        <button onClick={()=>onViewConvo(lead)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,position:"relative",padding:"3px 5px",lineHeight:1}}>
-          ⌥{unread>0&&<span style={{position:"absolute",top:-2,right:-2,background:C.orange,color:"#fff",borderRadius:"50%",width:13,height:13,fontSize:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{unread}</span>}
+        <button onClick={()=>onViewConvo(lead)} style={{background:needsReview?`${C.red}15`:"none",
+          border:needsReview?`1px solid ${C.red}44`:"none",
+          borderRadius:needsReview?5:0,
+          cursor:"pointer",fontSize:14,position:"relative",padding:"3px 5px",lineHeight:1}}>
+          ⌥{(unread>0||needsReview)&&<span style={{position:"absolute",top:-2,right:-2,
+            background:needsReview?C.red:C.orange,color:"#fff",borderRadius:"50%",
+            width:13,height:13,fontSize:8,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>
+            {needsReview?"!":unread}
+          </span>}
         </button>
         {lead.status==="pending"&&<Btn small variant="info" onClick={()=>onSMS(lead)}>SMS</Btn>}
         {lead.status==="contacted"&&<Btn small variant="success" onClick={()=>onBook(lead)}>Book</Btn>}
@@ -3528,6 +3559,33 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
     <Tabs tabs={["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={setTab}/>
+
+    {/* Priority conversations banner — shows when AI flagged leads need human response */}
+    {(()=>{
+      const priorityLeads=myLeads.filter(l=>l.notes&&l.notes.includes("⚠ Flagged for human review")&&l.status!=="won"&&l.status!=="cold");
+      if(!priorityLeads.length) return null;
+      return(
+        <div style={{background:`linear-gradient(135deg,${C.red}18,${C.red}08)`,
+          border:`1px solid ${C.red}44`,borderRadius:10,padding:"12px 16px",
+          display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:C.red,
+              animation:"pulse 1s ease-in-out infinite",flexShrink:0}}/>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:C.red}}>
+                {priorityLeads.length} conversation{priorityLeads.length>1?"s need":"needs"} your response
+              </div>
+              <div style={{fontSize:11,color:C.textSub,marginTop:1}}>
+                {priorityLeads.map(l=>l.homeowner).join(", ")} — AI couldn't answer their question
+              </div>
+            </div>
+          </div>
+          <Btn small variant="danger" onClick={()=>{
+            setViewingConvo(priorityLeads[0]);
+          }}>Reply Now →</Btn>
+        </div>
+      );
+    })()}
 
     {tab==="Jobs"&&<JobPipeline
       jobs={(jobs||[]).filter(j=>j.rooferId===roofer.id)}
@@ -4163,8 +4221,17 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
             }
 
             if(result.needsHumanReview){
+              const noteMsg = `⚠ ${lead.homeowner} needs a human response — AI couldn't handle their question. Open their conversation to reply.`;
               onUpdate("update_lead_notes",{leadId:lead.id,notes:((lead.notes||"")+" ⚠ Flagged for human review.").trim()});
-              addActivity({type:"system",message:`${lead.homeowner}'s conversation flagged for human review`,badge:"review",badgeColor:C.yellow});
+              onUpdate("notify_roofer",{rooferId:roofer.id,notification:{
+                type:"human_review",
+                priority:true,
+                leadId:lead.id,
+                leadName:lead.homeowner,
+                message:noteMsg,
+                smsText:`SkyShield URGENT: ${lead.homeowner} (${lead.phone}) needs your personal reply — the AI couldn't handle their question. Open the SkyShield app to respond.`,
+              }});
+              addActivity({type:"system",message:`${lead.homeowner}'s conversation needs human response`,badge:"⚠ URGENT",badgeColor:C.red});
             }
           }catch(e){ console.error("AI auto-reply failed:",e); }
         }

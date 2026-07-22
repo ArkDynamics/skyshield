@@ -273,13 +273,31 @@ export default async function handler(req, res) {
     }
 
     // 6. Save updated conversation and status to Supabase
+    const newNotes = aiResult?.needsHumanReview
+      ? ((lead.notes || "") + " ⚠ Flagged for human review.").trim()
+      : lead.notes;
+
     await sbPatch("leads", `id=eq.${lead.id}`, {
       conversations,
       status: newStatus,
       contacted_at: newStatus === "contacted" ? new Date().toISOString() : lead.contacted_at,
+      adult_confirmed: aiResult?.adultConfirmed || lead.adult_confirmed,
+      notes: newNotes,
     });
 
-    console.log(`✓ Saved reply from ${fromNumber} to lead ${lead.id}`);
+    // 7. If human review needed, SMS the roofer directly
+    if (aiResult?.needsHumanReview && roofer?.phone) {
+      const appRows = await sbGet("app_state", "id=eq.singleton");
+      const apiKeys = appRows?.[0]?.api_keys || {};
+      const twilioKeys = typeof apiKeys === "string" ? JSON.parse(apiKeys).twilio : apiKeys?.twilio;
+      if (twilioKeys?.sid && twilioKeys?.token) {
+        const urgentMsg = `SkyShield URGENT: ${lead.homeowner} (${lead.phone}) needs your personal reply — AI couldn't handle their question. Open SkyShield to respond now.`;
+        await sendSMS(twilioKeys.sid, twilioKeys.token, twilioKeys.from, roofer.phone, urgentMsg);
+        console.log(`✓ Sent priority alert to roofer ${roofer.phone}`);
+      }
+    }
+
+    console.log(`✓ Processed reply from ${fromNumber} for lead ${lead.id}`);
 
   } catch (err) {
     console.error("twilio-incoming error:", err);
