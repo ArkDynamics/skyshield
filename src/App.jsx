@@ -1431,18 +1431,13 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
   // Find storms that match this lead's ZIP
   const relatedStorms=(storms||[]).filter(s=>s.zip===lead.zip);
 
-  // Show Street View for booked+ leads that have an address
+  // Show property map for booked+ leads that have an address
   const BOOKED_STAGES = ["scheduled","won","contacted"];
   const showStreetView = BOOKED_STAGES.includes(lead.status) && lead.address && lead.zip;
-
-  // Google Street View Static API — no key needed for embed URL
-  const streetViewUrl = showStreetView
-    ? `https://maps.googleapis.com/maps/api/streetview?size=600x200&location=${encodeURIComponent(`${lead.address}, ${lead.zip}`)}&fov=90&pitch=0&key=YOUR_GOOGLE_MAPS_KEY`
-    : null;
-
-  // Fallback: use Google Maps embed (no API key needed)
-  const mapsEmbedUrl = showStreetView
-    ? `https://www.google.com/maps/embed/v1/streetview?key=YOUR_GOOGLE_MAPS_KEY&location=${encodeURIComponent(`${lead.address}, ${lead.zip}`)}&fov=90`
+  const fullAddress = showStreetView ? `${lead.address}, ${lead.zip}` : null;
+  // Google Maps embed works without an API key using the search endpoint
+  const mapsEmbedUrl = fullAddress
+    ? `https://maps.google.com/maps?q=${encodeURIComponent(fullAddress)}&output=embed&z=17`
     : null;
 
   return <Modal title={`${lead.homeowner} — ${lead.phone}`} onClose={onClose} wide>
@@ -1457,21 +1452,21 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
         <div style={{fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",
           letterSpacing:"0.07em",padding:"6px 10px",background:C.surface,
           borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:6}}>
-          <span>◆</span> Property — {lead.address}, {lead.zip}
-          <a href={`https://www.google.com/maps/search/${encodeURIComponent(`${lead.address}, ${lead.zip}`)}`}
+          <span>◆</span> Property — {fullAddress}
+          <a href={`https://www.google.com/maps/search/${encodeURIComponent(fullAddress)}`}
             target="_blank" rel="noreferrer"
             style={{marginLeft:"auto",fontSize:10,color:C.orange,textDecoration:"none"}}>
             Open in Maps →
           </a>
         </div>
         <iframe
-          title="Street View"
+          title="Property Map"
           width="100%"
-          height="200"
+          height="220"
           style={{display:"block",border:"none"}}
           loading="lazy"
           allowFullScreen
-          src={`https://www.google.com/maps/embed/v1/streetview?key=AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY&location=${encodeURIComponent(`${lead.address}, ${lead.zip}`)}&fov=80&pitch=0`}
+          src={mapsEmbedUrl}
         />
       </div>}
 
