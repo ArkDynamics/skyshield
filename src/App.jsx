@@ -1435,9 +1435,9 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
   const BOOKED_STAGES = ["scheduled","won","contacted"];
   const showStreetView = BOOKED_STAGES.includes(lead.status) && lead.address && lead.zip;
   const fullAddress = showStreetView ? `${lead.address}, ${lead.zip}` : null;
-  // Google Maps embed works without an API key using the search endpoint
+  const GOOGLE_MAPS_KEY = "AIzaSyAtr2wsraqDjd49KLRzqtebB7F9tVg-lvk";
   const mapsEmbedUrl = fullAddress
-    ? `https://maps.google.com/maps?q=${encodeURIComponent(fullAddress)}&output=embed&z=17`
+    ? `https://www.google.com/maps/embed/v1/streetview?key=${GOOGLE_MAPS_KEY}&location=${encodeURIComponent(fullAddress)}&fov=80&pitch=0`
     : null;
 
   return <Modal title={`${lead.homeowner} — ${lead.phone}`} onClose={onClose} wide>
@@ -1460,7 +1460,7 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
           </a>
         </div>
         <iframe
-          title="Property Map"
+          title="Street View"
           width="100%"
           height="220"
           style={{display:"block",border:"none"}}
