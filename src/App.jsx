@@ -942,7 +942,7 @@ async function generateLeadReply(lead, roofer, conversationHistory, availableSlo
   const adultStatus = lead.adultConfirmed || "unconfirmed";
 
   // Format slots for the AI to use in the message
-  const slotLines = availableSlots.slice(0,3).map((s,i)=>`Option ${i+1}: ${formatDateLabel(s.startISO)} at ${formatTimeLabel(s.startISO)}`).join("\n");
+  const slotLines = availableSlots.slice(0,6).map((s,i)=>`Option ${i+1}: ${s.label||formatDateLabel(s.startISO)+' at '+formatTimeLabel(s.startISO)+(s.startISO&&new Date(s.startISO).getHours()>=12?' (Afternoon)':' (Morning)')}`).join("\n");
 
   const sys = `You are an SMS scheduling assistant texting on behalf of ${roofer.name}, a roofing company, with a potential customer named ${lead.homeowner} whose home in ZIP ${lead.zip} was affected by a ${lead.stormType} storm.
 
@@ -4193,7 +4193,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           try{
             // Get available slots to pass to the AI
             const inspector=(roofer.inspectors||[]).find(i=>(i.zones||[]).includes(lead.zip))||(roofer.inspectors||[])[0];
-            const availableSlots = inspector ? getNextAvailableSlots(roofer,inspector.id,{limit:3}) : [];
+            const availableSlots = inspector ? getNextAvailableSlots(roofer,inspector.id,{limit:6}) : [];
 
             const history=[...lead.conversations,{role:"lead",msg:m.body,ts:m.date_sent}];
             const result=await generateLeadReply(lead,roofer,history,availableSlots);
@@ -4214,7 +4214,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
             const gateOk=!requireAdult||result.adultConfirmed==="confirmed";
 
             if(result.bookedSlotIndex!==null&&result.bookedSlotIndex!==undefined&&gateOk&&lead.status!=="scheduled"){
-              const slot = availableSlots[result.bookedSlotIndex] || availableSlots[0];
+              const slot = availableSlots[result.bookedSlotIndex] ?? availableSlots[0];
               if(slot&&inspector){
                 const ins={
                   id:"ins"+Date.now(),

@@ -81,27 +81,32 @@ async function generateAIReply(lead, roofer, incomingMsg, commSettings, availabl
     content: c.msg,
   }));
 
-  const slotLines = availableSlots.slice(0,3).map((s,i)=>`Option ${i+1}: ${s.label||s.startISO}`).join("\n");
+  const slotLines = availableSlots.slice(0,6).map((s,i)=>`Option ${i+1}: ${s.label||s.startISO}`).join("\n");
   const requireAdult = commSettings?.requireAdultPresent !== false;
   const adultStatus = lead.adult_confirmed || "unconfirmed";
 
   const systemPrompt = `You are an SMS scheduling assistant for ${roofer?.name || "a roofing company"} texting homeowner ${lead.homeowner} about their storm-damaged roof in ZIP ${lead.zip}.
 
-Your goal: qualify interest, confirm adult presence if required, offer specific appointment times from the calendar, and BOOK THE APPOINTMENT directly.
+Your goal: qualify interest, confirm adult presence if needed, offer appointment times, and BOOK directly in this conversation.
 
-${requireAdult ? `ADULT PRESENCE: Confirm someone 18+ will be home before offering times. Current status: ${adultStatus}.` : ""}
+${requireAdult ? `ADULT PRESENCE: Confirm someone 18+ will be home before booking. Current status: ${adultStatus}.` : ""}
 
-AVAILABLE SLOTS:
-${slotLines || "No slots available — ask for their preferred time"}
+ALL AVAILABLE SLOTS (offer the ones that match what they ask for):
+${slotLines || "No pre-built slots — ask for their preferred time and set wantsCustomTime:true"}
 
-FLOW:
-1. Show interest → offer the slots above
-2. They pick one → confirm it, set bookedSlotIndex to 0, 1, or 2
-3. They want different time → ask what works, set wantsCustomTime:true
-4. They confirm → send clear booking confirmation
+HANDLING COMMON RESPONSES:
+- "afternoon", "afternoon times", "PM" → offer only the slots labeled (Afternoon) or (Midday)
+- "morning" → offer only slots labeled (Morning)
+- "Friday works", "Monday", any day name → offer slots for that specific day
+- "Option 1", "Option 2", "#1", "1", "2", "3" → treat as selecting that numbered option, set bookedSlotIndex
+- "Do you?" or short follow-ups → they are following up on your last question, continue naturally
+- Pricing questions → inspections are FREE, insurance claims handled at no upfront cost
+- Any question you cannot answer confidently → set needsHumanReview:true and explain a team member will follow up
 
-Reply ONLY with valid JSON:
-{"reply":"SMS text under 300 chars","adultConfirmed":"confirmed"|"denied"|"unconfirmed","bookedSlotIndex":null|0|1|2,"wantsCustomTime":false|true,"preferredTime":null|"string","needsHumanReview":false|true}`;
+IMPORTANT: When bookedSlotIndex is set, include the full booking confirmation in the reply with date, time, and inspector name.
+
+Reply ONLY with valid JSON — no markdown, no extra text:
+{"reply":"SMS text under 300 chars","adultConfirmed":"confirmed"|"denied"|"unconfirmed","bookedSlotIndex":null|0|1|2|3|4|5,"wantsCustomTime":false|true,"preferredTime":null|"string","needsHumanReview":false|true}`;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -205,25 +210,43 @@ export default async function handler(req, res) {
         : typeof roofer.inspectors === "string" ? JSON.parse(roofer.inspectors) : [];
       const inspector = inspectors[0]; // first inspector
 
-      // Build simple slot labels for next 3 weekdays
+      // Build available slots across next several weekdays at multiple times
       const slots = [];
       if (inspector) {
         const startHour = parseInt((schedSettings.startTime || "08:00").split(":")[0]);
+        const endHour   = parseInt((schedSettings.endTime   || "17:00").split(":")[0]);
         const dur = schedSettings.durationMins || 60;
+        // Offer slots at: morning (start), midday (start+2), and afternoon (end-2)
+        const timeOffsets = [0, 2, Math.max(2, endHour - startHour - 2)];
         let d = new Date();
         d.setDate(d.getDate() + 1);
-        while (slots.length < 3) {
+        let attempts = 0;
+        while (slots.length < 6 && attempts < 14) {
+          attempts++;
           const dow = d.getDay();
           const dayNames = ["sun","mon","tue","wed","thu","fri","sat"];
           const dayKey = dayNames[dow];
           const daySchedule = schedSettings.days?.[dayKey];
           if (daySchedule?.open !== false && dow !== 0 && dow !== 6) {
             const dateStr = d.toISOString().split("T")[0];
-            const startISO = `${dateStr}T${String(startHour).padStart(2,"0")}:00:00`;
-            const endISO = new Date(new Date(startISO).getTime()+dur*60000).toISOString();
-            const label = d.toLocaleDateString("en-US",{weekday:"long",month:"short",day:"numeric"})
-              + ` at ${startHour > 12 ? startHour-12 : startHour}:00${startHour >= 12 ? "pm" : "am"}`;
-            slots.push({ startISO, endISO, label, inspectorId: inspector.id, inspectorName: inspector.name });
+            for (const offset of timeOffsets) {
+              const hour = startHour + offset;
+              if (hour >= endHour) continue;
+              const startISO = `${dateStr}T${String(hour).padStart(2,"0")}:00:00`;
+              const endISO = new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
+              const h12 = hour > 12 ? hour - 12 : hour;
+              const ampm = hour >= 12 ? "pm" : "am";
+              const timeStr = `${h12}:00${ampm}`;
+              const dayLabel = d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+              const period = hour < 12 ? "Morning" : hour < 15 ? "Midday" : "Afternoon";
+              slots.push({
+                startISO, endISO,
+                label: `${dayLabel} at ${timeStr} (${period})`,
+                inspectorId: inspector.id,
+                inspectorName: inspector.name,
+              });
+              if (slots.length >= 6) break;
+            }
           }
           d.setDate(d.getDate() + 1);
         }
@@ -250,20 +273,18 @@ export default async function handler(req, res) {
       // Book the inspection if homeowner selected a slot
       const slots = aiResult._slots || [];
       if (aiResult.bookedSlotIndex !== null && aiResult.bookedSlotIndex !== undefined) {
-        // We'll store a booking_pending flag — the app will create the actual inspection record
-        // when it next syncs, since we don't have full scheduling engine here
+        const slot = availableSlots[aiResult.bookedSlotIndex] || availableSlots[0];
         const patchData = {
           status: "scheduled",
           conversations,
           contacted_at: lead.contacted_at || new Date().toISOString(),
+          notes: ((lead.notes||"") + ` | AI booked: ${slot?.label||"slot "+(aiResult.bookedSlotIndex+1)}`).trim(),
         };
         if (aiResult.adultConfirmed) patchData.adult_confirmed = aiResult.adultConfirmed;
-        if (aiResult.preferredTime) {
-          patchData.notes = ((lead.notes || "") + ` | AI scheduled: slot ${aiResult.bookedSlotIndex + 1}`).trim();
-        }
         await sbPatch("leads", `id=eq.${lead.id}`, patchData);
         console.log(`✓ AI booked slot ${aiResult.bookedSlotIndex} for ${lead.homeowner}`);
-        return res.setHeader("Content-Type","text/xml") && res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+        res.setHeader("Content-Type","text/xml");
+        return res.status(200).send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
       }
 
       // Update adult confirmed if changed
