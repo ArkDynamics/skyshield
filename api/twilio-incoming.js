@@ -77,7 +77,7 @@ async function sendSMS(sid, token, from, to, body) {
 }
 
 // ── Slot builder ──────────────────────────────────────────────────────────────
-function buildSlots(roofer) {
+function buildSlots(roofer, existingInspections = []) {
   const raw = roofer.schedule_settings;
   const sched = raw ? (typeof raw === "string" ? JSON.parse(raw) : raw) : {};
   const rawIns = roofer.inspectors;
@@ -91,8 +91,18 @@ function buildSlots(roofer) {
   const endHour   = parseInt((sched.endTime   || "17:00").split(":")[0], 10);
   const dur       = sched.durationMins || 60;
 
-  // 3 times per working day: morning, midday, afternoon
-  const offsets = [0, Math.floor((endHour - startHour) / 2), endHour - startHour - 1].filter(o => o >= 0);
+  // Build set of already-booked start times for fast lookup
+  const bookedTimes = new Set(
+    existingInspections
+      .filter(i => i.status === "scheduled" || i.status === "rescheduled")
+      .map(i => i.start_iso || i.startISO || "")
+      .filter(Boolean)
+      .map(iso => iso.slice(0, 16)) // "2026-07-27T08:00"
+  );
+
+  // Offer morning, midday, afternoon per day
+  const offsets = [0, Math.floor((endHour - startHour) / 2), endHour - startHour - 1]
+    .filter(o => o >= 0 && (startHour + o) < endHour);
 
   const slots = [];
   const d = new Date();
@@ -102,28 +112,50 @@ function buildSlots(roofer) {
   while (slots.length < 6 && attempts < 21) {
     attempts++;
     const dow = d.getDay();
-    if (dow !== 0 && dow !== 6) { // skip weekends
-      const dateStr = d.toISOString().split("T")[0];
-      for (const offset of offsets) {
-        const hour = startHour + offset;
-        if (hour >= endHour) continue;
-        const startISO = `${dateStr}T${String(hour).padStart(2,"0")}:00:00`;
-        const endISO   = new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
-        const h12  = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
-        const ampm = hour >= 12 ? "pm" : "am";
-        const period = hour < 12 ? "Morning" : hour < 15 ? "Midday" : "Afternoon";
-        const dayStr = d.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
-        slots.push({
-          startISO, endISO,
-          label: `${dayStr} at ${h12}:00${ampm} (${period})`,
-          inspectorId: inspector.id,
-          inspectorName: inspector.name || "Inspector",
-        });
-        if (slots.length >= 6) break;
-      }
+    const dayNames = ["sun","mon","tue","wed","thu","fri","sat"];
+    const dayKey = dayNames[dow];
+    const daySchedule = sched.days?.[dayKey];
+
+    // Skip weekends and days explicitly marked closed
+    if (dow === 0 || dow === 6 || daySchedule?.open === false) {
+      d.setDate(d.getDate() + 1);
+      continue;
     }
+
+    const dateStr = d.toISOString().split("T")[0];
+
+    for (const offset of offsets) {
+      const hour = startHour + offset;
+      if (hour >= endHour) continue;
+
+      const startISO = `${dateStr}T${String(hour).padStart(2,"0")}:00:00`;
+      const slotKey  = startISO.slice(0, 16);
+
+      // Skip if already booked
+      if (bookedTimes.has(slotKey)) {
+        console.log(`Slot ${slotKey} already booked — skipping`);
+        continue;
+      }
+
+      const endISO  = new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
+      const h12     = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+      const ampm    = hour >= 12 ? "pm" : "am";
+      const period  = hour < 12 ? "Morning" : hour < 15 ? "Midday" : "Afternoon";
+      const dayStr  = d.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
+
+      slots.push({
+        startISO, endISO,
+        label: `${dayStr} at ${h12}:00${ampm} (${period})`,
+        inspectorId: inspector.id,
+        inspectorName: inspector.name || "Inspector",
+      });
+
+      if (slots.length >= 6) break;
+    }
+
     d.setDate(d.getDate() + 1);
   }
+
   return slots;
 }
 
@@ -160,21 +192,22 @@ GOAL: book a free roof inspection directly in this conversation.
 
 ${requireAdult ? `ADULT PRESENCE: Before booking, confirm someone 18+ will be home. Status: ${adultStatus}.` : ""}
 
-AVAILABLE TIMES:
-${slotLines || "No pre-built slots available — ask for their preferred time and set wantsCustomTime:true"}
+AVAILABLE TIMES (these are the ONLY open slots — don't imply others exist):
+${slotLines || "No slots available right now — ask for their preferred time and set wantsCustomTime:true"}
 
 HOW TO HANDLE RESPONSES:
-- Interest shown → offer the slots above (all 6, or filtered by their preference)
-- "afternoon" / "PM" → show only Afternoon/Midday slots
-- "morning" / "AM" → show only Morning slots
-- Day name like "Friday" → show slots for that day
+- Interest shown → offer all the slots above
+- "afternoon" / "PM" → show only Afternoon/Midday slots from the list above
+- "morning" / "AM" → show only Morning slots from the list above
+- Day name like "Friday" or a date like "the 31st" → check if any slots above are on that day. If yes offer them. If no, be honest that day isn't available and re-offer the slots that ARE available
 - "Option 1", "1", "2", "3", bare number → set bookedSlotIndex to that number minus 1 (0-indexed)
-- Short replies like "yes", "sure", "ok" → confirm interest and offer slots if not yet offered
-- Pricing → inspections are FREE, we work with insurance companies
+- "yes", "sure", "ok" → confirm interest and offer all slots if not yet offered
+- "first week of August" or future dates → if no slots are available that far out, be honest and say scheduling opens up as we get closer, and offer what IS available now
+- Pricing → inspections are FREE, we work with insurance
 - Can't answer → set needsHumanReview:true
 
-WHEN BOOKING: include the full date, time, and inspector name in the confirmation reply.
-Keep all messages under 300 characters. Be warm and conversational, not robotic.
+WHEN BOOKING: reply must include the full date, time, and inspector name as confirmation.
+Keep all messages under 300 characters. Be warm and conversational.
 
 Reply ONLY with this exact JSON (no markdown, no extra text):
 {"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
@@ -282,8 +315,14 @@ export default async function handler(req, res) {
     console.log("Auto-reply enabled:", autoReply, "| Roofer:", roofer?.name);
 
     let aiResult = null;
-    const slots = roofer ? buildSlots(roofer) : [];
-    console.log("Slots built:", slots.length);
+    // Fetch roofer's existing inspections to exclude booked slots
+    const existingInspections = roofer
+      ? ((typeof roofer.inspections === "string"
+          ? JSON.parse(roofer.inspections || "[]")
+          : roofer.inspections) || [])
+      : [];
+    const slots = roofer ? buildSlots(roofer, existingInspections) : [];
+    console.log("Slots built:", slots.length, "| Booked inspections:", existingInspections.filter(i=>i.status==="scheduled").length);
 
     if (autoReply) {
       aiResult = await generateAIReply(lead, roofer, body, commSettings, slots);
