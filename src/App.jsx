@@ -3659,7 +3659,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
       </div>
       {showAddLead&&<AddLeadModal roofers={[roofer]} defaultRooferId={roofer.id} onClose={()=>setShowAddLead(false)} onAdd={lead=>{onUpdate("add_lead",{lead});setShowAddLead(false);}}/>}
       <TableWrap headers={["Homeowner","Phone","ZIP","Storm","Status","Actions"]} empty={filteredLeads.length===0?"No leads match this filter.":undefined}>
-        {filteredLeads.map(l=><LeadRow key={l.id} lead={l} roofers={[roofer]} onSMS={smsLead} onBook={bookLead} onEdit={setEditingLead} onDelete={l=>onUpdate("delete_lead",{leadId:l.id})} onViewConvo={setViewingConvo} onLogRevenue={setLoggingRevenue} showRoofer={false}/>)}
+        {filteredLeads.map(l=><LeadRow key={l.id} lead={l} roofers={[roofer]} onSMS={smsLead} onBook={bookLead} onEdit={setEditingLead} onDelete={dl=>onUpdate("delete_lead",{leadId:dl.id})} onViewConvo={setViewingConvo} onLogRevenue={setLoggingRevenue} showRoofer={false}/>)}
       </TableWrap>
     </div>}
 
@@ -4580,7 +4580,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
       </div>
       {showAddLeadAdmin&&<AddLeadModal roofers={roofers} onClose={()=>setShowAddLeadAdmin(false)} onAdd={lead=>{onUpdate("add_lead",{lead});setShowAddLeadAdmin(false);}}/>}
       <TableWrap headers={["Homeowner","Phone","ZIP","Roofer","Storm","Status","Actions"]} empty={filteredLeads.length===0?"No leads match this filter.":undefined}>
-        {filteredLeads.map(l=><LeadRow key={l.id} lead={l} roofers={roofers} onSMS={smsLead} onBook={bookLead} onEdit={setEditingLead} onDelete={l=>onUpdate("delete_lead",{leadId:l.id})} onViewConvo={setViewingConvo} onLogRevenue={setLoggingRevenue} showRoofer={true}/>)}
+        {filteredLeads.map(l=><LeadRow key={l.id} lead={l} roofers={roofers} onSMS={smsLead} onBook={bookLead} onEdit={setEditingLead} onDelete={dl=>onUpdate("delete_lead",{leadId:dl.id})} onViewConvo={setViewingConvo} onLogRevenue={setLoggingRevenue} showRoofer={true}/>)}
       </TableWrap>
     </div>}
 
