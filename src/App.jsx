@@ -1361,26 +1361,42 @@ Explain features clearly. If they ask how to do something, walk them through it 
 }
 
 function AIAgent({roofers,leads,storms,apiKeys,onUpdate,context}){
-  const[msgs,setMsgs]=useState([]),[input,setInput]=useState(""),[loading,setLoading]=useState(false);
+  const[msgs,setMsgs]=useState([]);
+  const[input,setInput]=useState("");
+  const[loading,setLoading]=useState(false);
   const bottomRef=useRef(null);
-  useEffect(()=>bottomRef.current?.scrollIntoView({behavior:"smooth"}),[msgs]);
+  const mountedRef=useRef(true);
+
+  useEffect(()=>{
+    mountedRef.current=true;
+    return()=>{ mountedRef.current=false; };
+  },[]);
+
+  useEffect(()=>{
+    try{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); }catch(e){}
+  },[msgs]);
 
   const sys=`You are SkyShield Pro AI — a CRM assistant for a roofing lead platform by Ark Dynamics.
 ${context}
-ROOFERS: ${JSON.stringify(roofers.map(r=>({id:r.id,name:r.name,plan:r.plan,status:r.status,territories:r.territories,leads:r.leads,booked:r.booked,revenue:r.revenue})))}
-LEADS: ${JSON.stringify(leads.map(l=>({id:l.id,homeowner:l.homeowner,zip:l.zip,rooferId:l.rooferId,stormType:l.stormType,status:l.status,notes:l.notes})))}
-STORMS: ${JSON.stringify(storms)}
+ROOFERS: ${JSON.stringify((roofers||[]).map(r=>({id:r.id,name:r.name,plan:r.plan,status:r.status,territories:r.territories,leads:r.leads,booked:r.booked,revenue:r.revenue})))}
+LEADS: ${JSON.stringify((leads||[]).map(l=>({id:l.id,homeowner:l.homeowner,zip:l.zip,rooferId:l.rooferId,stormType:l.stormType,status:l.status,notes:l.notes})))}
+STORMS: ${JSON.stringify(storms||[])}
 Perform CRM actions by appending <ACTION>{"type":"...","payload":{...}}</ACTION> at the end of your message.
 Actions: add_roofer, delete_roofer, edit_roofer, add_lead, delete_lead, edit_lead, lead_status, update_roofer_plan, update_roofer_status, update_lead_notes.
 Always explain in plain English first, then include action blocks. Ask for clarification if ambiguous.`;
 
   async function send(){
-    if(!input.trim()) return;
-    const userMsg={role:"user",content:input},newMsgs=[...msgs,userMsg];
-    setMsgs(newMsgs);setInput("");setLoading(true);
+    if(!input.trim()||loading) return;
+    const userMsg={role:"user",content:input};
+    const newMsgs=[...msgs,userMsg];
+    if(mountedRef.current) setMsgs(newMsgs);
+    if(mountedRef.current) setInput("");
+    if(mountedRef.current) setLoading(true);
     try{
       const reply=await callClaude(newMsgs,sys,1400);
-      const ar=/<ACTION>([\s\S]*?)<\/ACTION>/g;let m;
+      if(!mountedRef.current) return; // component unmounted while waiting
+      const ar=/<ACTION>([\s\S]*?)<\/ACTION>/g;
+      let m;
       while((m=ar.exec(reply))!==null){
         try{
           const{type,payload}=JSON.parse(m[1]);
@@ -1394,11 +1410,14 @@ Always explain in plain English first, then include action blocks. Ask for clari
           else if(type==="update_roofer_plan") onUpdate("update_roofer_plan",payload);
           else if(type==="update_roofer_status") onUpdate("update_roofer_status",payload);
           else if(type==="update_lead_notes") onUpdate("update_lead_notes",payload);
-        }catch(e){console.error("Action err",e);}
+        }catch(e){ console.error("Action err",e); }
       }
-      setMsgs([...newMsgs,{role:"assistant",content:reply.replace(/<ACTION>[\s\S]*?<\/ACTION>/g,"").trim()}]);
-    }catch(e){setMsgs([...newMsgs,{role:"assistant",content:`Error: ${e.message}`}]);}
-    setLoading(false);
+      const cleanReply=reply.replace(/<ACTION>[\s\S]*?<\/ACTION>/g,"").trim();
+      if(mountedRef.current) setMsgs([...newMsgs,{role:"assistant",content:cleanReply}]);
+    }catch(e){
+      if(mountedRef.current) setMsgs([...newMsgs,{role:"assistant",content:`Error: ${e.message}`}]);
+    }
+    if(mountedRef.current) setLoading(false);
   }
 
   return <div style={{display:"flex",flexDirection:"column",height:500,...card()}}>
