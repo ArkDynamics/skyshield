@@ -3483,14 +3483,57 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
   );
 }
 
+function UpcomingInspections({inspections}){
+  const upcoming=(inspections||[]).filter(i=>i.status==="scheduled"&&new Date(i.startISO)>=new Date()).sort((a,b)=>new Date(a.startISO)-new Date(b.startISO)).slice(0,5);
+  if(!upcoming.length) return <div style={{color:C.textMuted,fontSize:13}}>No upcoming inspections.</div>;
+  return <>{upcoming.map(ins=>(
+    <div key={ins.id} style={{...flex(0,"center","space-between"),padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
+      <div><div style={{fontSize:13,fontWeight:600}}>{ins.client}</div><div style={{fontSize:12,color:C.textSub,marginTop:2}}>{ins.address}</div></div>
+      <div style={{textAlign:"right"}}>
+        <div style={{fontSize:12,color:C.orange,fontWeight:500}}>{formatDateLabel(ins.startISO)} · {formatTimeLabel(ins.startISO)}</div>
+        <div style={{fontSize:12,color:C.textMuted}}>{ins.inspector}</div>
+      </div>
+    </div>
+  ))}</>;
+}
+
+function PriorityBanner({leads, onReply}){
+  const priorityLeads=(leads||[]).filter(l=>l.notes&&l.notes.includes("⚠ Flagged for human review")&&l.status!=="won"&&l.status!=="cold");
+  if(!priorityLeads.length) return null;
+  return(
+    <div style={{background:`linear-gradient(135deg,${C.red}18,${C.red}08)`,
+      border:`1px solid ${C.red}44`,borderRadius:10,padding:"12px 16px",
+      display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:4}}>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{width:8,height:8,borderRadius:"50%",background:C.red,flexShrink:0}}/>
+        <div>
+          <div style={{fontSize:13,fontWeight:700,color:C.red}}>
+            {priorityLeads.length} conversation{priorityLeads.length>1?"s need":"needs"} your response
+          </div>
+          <div style={{fontSize:11,color:C.textSub,marginTop:1}}>
+            {priorityLeads.map(l=>l.homeowner).join(", ")} — AI couldn't answer their question
+          </div>
+        </div>
+      </div>
+      <Btn small variant="danger" onClick={()=>onReply(priorityLeads[0])}>Reply Now →</Btn>
+    </div>
+  );
+}
+
 function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,addActivity}){
   const isMobile=useIsMobile();
+  const ROOFER_TABS=["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"];
   const[tab,setTab]=useState(()=>{
-    try{const s=sessionStorage.getItem("roofer_tab");
-    const valid=["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"];
-    return valid.includes(s)?s:"Overview";}catch(e){return "Overview";}
+    const h=window.location.hash.slice(1);
+    const fromHash=ROOFER_TABS.find(t=>t.toLowerCase().replace(/\s+/g,"-")===h);
+    if(fromHash) return fromHash;
+    try{const s=sessionStorage.getItem("roofer_tab");return ROOFER_TABS.includes(s)?s:"Overview";}catch(e){return "Overview";}
   });
-  function changeTab(t){setTab(t);try{sessionStorage.setItem("roofer_tab",t);}catch(e){}}
+  function changeTab(t){
+    setTab(t);
+    window.location.replace("#"+t.toLowerCase().replace(/\s+/g,"-"));
+    try{sessionStorage.setItem("roofer_tab",t);}catch(e){}
+  }
   const[showAddInspector,setShowAddInspector]=useState(false);
   const[bookingModal,setBookingModal]=useState(null); // {leadToBook} | {existingInspection} | {} for blank manual
   const[editingLead,setEditingLead]=useState(null);
@@ -3579,32 +3622,8 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
 
     <Tabs tabs={["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={changeTab}/>
 
-    {/* Priority conversations banner — shows when AI flagged leads need human response */}
-    {(()=>{
-      const priorityLeads=myLeads.filter(l=>l.notes&&l.notes.includes("⚠ Flagged for human review")&&l.status!=="won"&&l.status!=="cold");
-      if(!priorityLeads.length) return null;
-      return(
-        <div style={{background:`linear-gradient(135deg,${C.red}18,${C.red}08)`,
-          border:`1px solid ${C.red}44`,borderRadius:10,padding:"12px 16px",
-          display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{width:8,height:8,borderRadius:"50%",background:C.red,
-              animation:"pulse 1s ease-in-out infinite",flexShrink:0}}/>
-            <div>
-              <div style={{fontSize:13,fontWeight:700,color:C.red}}>
-                {priorityLeads.length} conversation{priorityLeads.length>1?"s need":"needs"} your response
-              </div>
-              <div style={{fontSize:11,color:C.textSub,marginTop:1}}>
-                {priorityLeads.map(l=>l.homeowner).join(", ")} — AI couldn't answer their question
-              </div>
-            </div>
-          </div>
-          <Btn small variant="danger" onClick={()=>{
-            setViewingConvo(priorityLeads[0]);
-          }}>Reply Now →</Btn>
-        </div>
-      );
-    })()}
+    {/* Priority conversations banner */}
+    <PriorityBanner leads={myLeads} onReply={setViewingConvo}/>
 
     {tab==="Jobs"&&<JobPipeline
       jobs={(jobs||[]).filter(j=>j.rooferId===roofer.id)}
@@ -3640,14 +3659,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
       </div>
       <div style={card()}>
         <div style={{...T.head(13,600),marginBottom:14}}>Upcoming Inspections</div>
-        {(()=>{
-          const upcoming=roofer.inspections.filter(i=>i.status==="scheduled"&&new Date(i.startISO)>=new Date()).sort((a,b)=>new Date(a.startISO)-new Date(b.startISO)).slice(0,5);
-          if(upcoming.length===0) return <div style={{color:C.textMuted,fontSize:13}}>No upcoming inspections.</div>;
-          return upcoming.map(ins=><div key={ins.id} style={{...flex(0,"center","space-between"),padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
-            <div><div style={{fontSize:13,fontWeight:600}}>{ins.client}</div><div style={{fontSize:12,color:C.textSub,marginTop:2}}>{ins.address}</div></div>
-            <div style={{textAlign:"right"}}><div style={{fontSize:12,color:C.orange,fontWeight:500}}>{formatDateLabel(ins.startISO)} · {formatTimeLabel(ins.startISO)}</div><div style={{fontSize:12,color:C.textMuted}}>{ins.inspector}</div></div>
-          </div>);
-        })()}
+        <UpcomingInspections inspections={roofer.inspections||[]}/>
       </div>
     </div>}
 
@@ -3940,12 +3952,18 @@ function StormDetailPanel({storm, leads, roofers, apiKeys, onClose}){
 function detailRow(){ return {display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 10px",background:C.surface,borderRadius:6,border:`1px solid ${C.border}`}; }
 
 function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,scanSettings,onScanSettingsChange,activities,addActivity,zipTerritories,zipLeadPulls,setZipLeadPulls}){
+  const CMD_TABS=["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"];
   const[tab,setTab]=useState(()=>{
-    try{const s=sessionStorage.getItem("cmd_tab");
-    const valid=["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"];
-    return valid.includes(s)?s:"Overview";}catch(e){return "Overview";}
+    const h=window.location.hash.slice(1);
+    const fromHash=CMD_TABS.find(t=>t.toLowerCase().replace(/\s+/g,"-")===h);
+    if(fromHash) return fromHash;
+    try{const s=sessionStorage.getItem("cmd_tab");return CMD_TABS.includes(s)?s:"Overview";}catch(e){return "Overview";}
   });
-  function changeTab(t){setTab(t);try{sessionStorage.setItem("cmd_tab",t);}catch(e){}}
+  function changeTab(t){
+    setTab(t);
+    window.location.replace("#"+t.toLowerCase().replace(/\s+/g,"-"));
+    try{sessionStorage.setItem("cmd_tab",t);}catch(e){}
+  }
   const[showAddRoofer,setShowAddRoofer]=useState(false);
   const[editingRoofer,setEditingRoofer]=useState(null);
   const[editingLead,setEditingLead]=useState(null);
@@ -6422,12 +6440,18 @@ export default function App(){
   const[leads,setLeads]=useState([]);
   const[storms,setStorms]=useState([]);
   const[apiKeys,setApiKeys]=useState({});
+  const ADMIN_SECTIONS=["Jobs","Command Center","Subscriptions & Billing","API Settings"];
   const[activeSection,setActiveSectionRaw]=useState(()=>{
-    try{const s=sessionStorage.getItem("admin_section");
-    const valid=["Jobs","Command Center","Subscriptions & Billing","API Settings"];
-    return valid.includes(s)?s:"Command Center";}catch(e){return "Command Center";}
+    const h=window.location.hash.slice(1);
+    const fromHash=ADMIN_SECTIONS.find(s=>s.toLowerCase().replace(/[\s&]+/g,"-")===h);
+    if(fromHash) return fromHash;
+    try{const s=sessionStorage.getItem("admin_section");return ADMIN_SECTIONS.includes(s)?s:"Command Center";}catch(e){return "Command Center";}
   });
-  function setActiveSection(s){setActiveSectionRaw(s);try{sessionStorage.setItem("admin_section",s);}catch(e){}}
+  function setActiveSection(s){
+    setActiveSectionRaw(s);
+    window.location.replace("#"+s.toLowerCase().replace(/[\s&]+/g,"-"));
+    try{sessionStorage.setItem("admin_section",s);}catch(e){}
+  }
   const[selectedRoofer,setSelectedRoofer]=useState(null);
   const[mobileNavOpen,setMobileNavOpen]=useState(false);
   const isMobile=useIsMobile();
