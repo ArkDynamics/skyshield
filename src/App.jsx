@@ -6360,11 +6360,12 @@ function APISettings({apiKeys,onUpdate}){
 // Catches any unhandled React render errors so the screen doesn't go blank.
 // Shows a friendly recovery UI instead of a white screen.
 class ErrorBoundary extends React.Component {
-  constructor(props){ super(props); this.state={hasError:false,error:null,errorInfo:null}; }
+  constructor(props){ super(props); this.state={hasError:false,error:null,stack:null}; }
   static getDerivedStateFromError(error){ return {hasError:true,error}; }
-  componentDidCatch(error,errorInfo){
-    console.error("SkyShield Error:",error,errorInfo);
-    this.setState({errorInfo});
+  componentDidCatch(error,info){
+    console.error("SkyShield crash:",error);
+    console.error("Component stack:",info.componentStack);
+    this.setState({stack:info.componentStack});
   }
   render(){
     if(!this.state.hasError) return this.props.children;
@@ -6372,24 +6373,29 @@ class ErrorBoundary extends React.Component {
       <div style={{minHeight:"100vh",background:"#030e18",display:"flex",alignItems:"center",
         justifyContent:"center",padding:20,fontFamily:"'Inter',sans-serif"}}>
         <div style={{background:"#071828",border:"1px solid rgba(248,113,113,0.3)",borderRadius:16,
-          padding:36,maxWidth:480,width:"100%",textAlign:"center",
+          padding:36,maxWidth:600,width:"100%",
           boxShadow:"0 24px 60px rgba(0,0,0,0.5)"}}>
           <div style={{fontSize:32,marginBottom:16,color:"#f87171",fontWeight:700}}>!</div>
           <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:700,
             color:"#fff",marginBottom:8}}>Something went wrong</div>
-          <div style={{fontSize:13,color:"#5a9ab0",lineHeight:1.6,marginBottom:8}}>
-            An unexpected error occurred. Your data is safe — click below to recover.
+          <div style={{fontSize:13,color:"#5a9ab0",lineHeight:1.6,marginBottom:12}}>
+            An unexpected error occurred. Your data is safe.
           </div>
-          {this.state.error&&<div style={{fontSize:11,color:"rgba(160,196,208,0.4)",
-            background:"rgba(0,0,0,0.3)",borderRadius:6,padding:"8px 12px",
-            marginBottom:20,textAlign:"left",fontFamily:"monospace",wordBreak:"break-all"}}>
-            {this.state.error.toString()}
-          </div>}
+          <div style={{fontSize:11,color:"rgba(248,113,113,0.8)",
+            background:"rgba(248,113,113,0.08)",borderRadius:6,padding:"10px 12px",
+            marginBottom:12,fontFamily:"monospace",wordBreak:"break-all",whiteSpace:"pre-wrap"}}>
+            {this.state.error?.toString()}
+          </div>
+          {this.state.stack&&<details style={{marginBottom:16}}>
+            <summary style={{fontSize:11,color:"#5a9ab0",cursor:"pointer",marginBottom:6}}>Component stack (click to expand)</summary>
+            <div style={{fontSize:10,color:"rgba(160,196,208,0.5)",fontFamily:"monospace",
+              whiteSpace:"pre-wrap",maxHeight:150,overflow:"auto"}}>{this.state.stack}</div>
+          </details>}
           <div style={{display:"flex",gap:10,justifyContent:"center"}}>
-            <button onClick={()=>this.setState({hasError:false,error:null,errorInfo:null})}
+            <button onClick={()=>this.setState({hasError:false,error:null,stack:null})}
               style={{fontSize:13,fontWeight:600,padding:"10px 22px",borderRadius:8,
                 background:"linear-gradient(135deg,#0d9488,#0284c7)",color:"#fff",
-                border:"none",cursor:"pointer",boxShadow:"0 4px 14px rgba(13,148,136,0.35)"}}>
+                border:"none",cursor:"pointer"}}>
               Try Again
             </button>
             <button onClick={()=>window.location.reload()}
