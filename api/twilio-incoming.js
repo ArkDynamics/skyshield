@@ -77,6 +77,9 @@ async function sendSMS(sid, token, from, to, body) {
 }
 
 // ── Slot builder ──────────────────────────────────────────────────────────────
+// Generates every available hour within working hours across the next 2 weeks.
+// This way when a homeowner asks for "2pm" or "3:30pm" the AI can check
+// if that time is genuinely available and offer it directly.
 function buildSlots(roofer, existingInspections = []) {
   const raw = roofer.schedule_settings;
   const sched = raw ? (typeof raw === "string" ? JSON.parse(raw) : raw) : {};
@@ -85,82 +88,72 @@ function buildSlots(roofer, existingInspections = []) {
     ? (Array.isArray(rawIns) ? rawIns : JSON.parse(rawIns))
     : [];
   const inspector = inspectors[0];
-  if (!inspector) return [];
+  if (!inspector) return { slots: [], startHour: 8, endHour: 17, dur: 60 };
 
   const startHour = parseInt((sched.startTime || "08:00").split(":")[0], 10);
   const endHour   = parseInt((sched.endTime   || "17:00").split(":")[0], 10);
   const dur       = sched.durationMins || 60;
 
-  // Build set of already-booked start times for fast lookup
+  // Build set of already-booked start times
   const bookedTimes = new Set(
     existingInspections
       .filter(i => i.status === "scheduled" || i.status === "rescheduled")
-      .map(i => i.start_iso || i.startISO || "")
+      .map(i => (i.start_iso || i.startISO || "").slice(0, 16))
       .filter(Boolean)
-      .map(iso => iso.slice(0, 16)) // "2026-07-27T08:00"
   );
-
-  // Offer morning, midday, afternoon per day
-  const offsets = [0, Math.floor((endHour - startHour) / 2), endHour - startHour - 1]
-    .filter(o => o >= 0 && (startHour + o) < endHour);
 
   const slots = [];
   const d = new Date();
   d.setDate(d.getDate() + 1);
   let attempts = 0;
 
-  while (slots.length < 6 && attempts < 21) {
+  while (attempts < 21) {
     attempts++;
     const dow = d.getDay();
     const dayNames = ["sun","mon","tue","wed","thu","fri","sat"];
     const dayKey = dayNames[dow];
     const daySchedule = sched.days?.[dayKey];
 
-    // Skip weekends and days explicitly marked closed
     if (dow === 0 || dow === 6 || daySchedule?.open === false) {
       d.setDate(d.getDate() + 1);
       continue;
     }
 
     const dateStr = d.toISOString().split("T")[0];
+    const dayStr  = d.toLocaleDateString("en-US", { weekday:"long", month:"short", day:"numeric" });
 
-    for (const offset of offsets) {
-      const hour = startHour + offset;
-      if (hour >= endHour) continue;
-
+    // Every hour within working hours
+    for (let hour = startHour; hour < endHour; hour++) {
       const startISO = `${dateStr}T${String(hour).padStart(2,"0")}:00:00`;
       const slotKey  = startISO.slice(0, 16);
 
-      // Skip if already booked
-      if (bookedTimes.has(slotKey)) {
-        console.log(`Slot ${slotKey} already booked — skipping`);
-        continue;
-      }
+      if (bookedTimes.has(slotKey)) continue;
 
-      const endISO  = new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
-      const h12     = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
-      const ampm    = hour >= 12 ? "pm" : "am";
-      const period  = hour < 12 ? "Morning" : hour < 15 ? "Midday" : "Afternoon";
-      const dayStr  = d.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
+      const endISO = new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
+      const h12    = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+      const ampm   = hour >= 12 ? "pm" : "am";
+      const period = hour < 12 ? "Morning" : hour < 15 ? "Midday" : "Afternoon";
 
       slots.push({
         startISO, endISO,
         label: `${dayStr} at ${h12}:00${ampm} (${period})`,
+        date: dateStr,
+        hour,
+        dayOfWeek: dayNames[dow],
         inspectorId: inspector.id,
         inspectorName: inspector.name || "Inspector",
       });
-
-      if (slots.length >= 6) break;
     }
 
     d.setDate(d.getDate() + 1);
   }
 
-  return slots;
+  return { slots, startHour, endHour, dur, inspector };
 }
 
+
 // ── AI reply ──────────────────────────────────────────────────────────────────
-async function generateAIReply(lead, roofer, incomingMsg, commSettings, slots) {
+async function generateAIReply(lead, roofer, incomingMsg, commSettings, slots, startHour=8, endHour=17) {
   if (!ANTHROPIC_KEY) {
     console.warn("ANTHROPIC_API_KEY not set");
     return null;
@@ -184,32 +177,52 @@ async function generateAIReply(lead, roofer, incomingMsg, commSettings, slots) {
 
   const requireAdult = commSettings?.requireAdultPresent !== false;
   const adultStatus  = lead.adult_confirmed || "unconfirmed";
-  const slotLines    = slots.map((s, i) => `Option ${i + 1}: ${s.label}`).join("\n");
+
+  // Convert hour to 12h label for display
+  const h12 = h => `${h===0?12:h>12?h-12:h}:00${h>=12?"pm":"am"}`;
+  const startLabel = h12(startHour);
+  const endLabel   = h12(endHour);
+
+  // Build a condensed slot list showing unique days and available hours
+  // Group slots by date to keep the prompt concise
+  const slotsByDate = {};
+  slots.forEach((s, i) => {
+    if (!slotsByDate[s.date]) slotsByDate[s.date] = { label: s.label.split(" at ")[0], hours: [], indices: [] };
+    slotsByDate[s.date].hours.push(h12(s.hour));
+    slotsByDate[s.date].indices.push(i);
+  });
+  const slotSummary = Object.entries(slotsByDate).slice(0, 10)
+    .map(([date, info]) => `${info.label}: ${info.hours.join(", ")}`)
+    .join("\n");
 
   const system = `You are an SMS scheduling assistant for ${roofer?.name || "a roofing company"} texting homeowner ${lead.homeowner || "the homeowner"} about their storm-damaged roof.
 
 GOAL: book a free roof inspection directly in this conversation.
 
-${requireAdult ? `ADULT PRESENCE: Before booking, confirm someone 18+ will be home. Status: ${adultStatus}.` : ""}
+${requireAdult ? `ADULT PRESENCE: Confirm someone 18+ will be home before booking. Current status: ${adultStatus}.` : ""}
 
-AVAILABLE TIMES (these are the ONLY open slots — don't imply others exist):
-${slotLines || "No slots available right now — ask for their preferred time and set wantsCustomTime:true"}
+WORKING HOURS: ${startLabel} to ${endLabel} weekdays. Any time within these hours on an available day can be offered.
 
-HOW TO HANDLE RESPONSES:
-- Interest shown → offer all the slots above
-- "afternoon" / "PM" → show only Afternoon/Midday slots from the list above
-- "morning" / "AM" → show only Morning slots from the list above
-- Day name like "Friday" or a date like "the 31st" → check if any slots above are on that day. If yes offer them. If no, be honest that day isn't available and re-offer the slots that ARE available
-- "Option 1", "1", "2", "3", bare number → set bookedSlotIndex to that number minus 1 (0-indexed)
-- "yes", "sure", "ok" → confirm interest and offer all slots if not yet offered
-- "first week of August" or future dates → if no slots are available that far out, be honest and say scheduling opens up as we get closer, and offer what IS available now
-- Pricing → inspections are FREE, we work with insurance
+AVAILABLE DAYS AND TIMES (every hour shown is open and unbooked):
+${slotSummary || "No availability right now — ask for their preferred time and set wantsCustomTime:true"}
+
+HOW TO RESPOND:
+- Interest / "yes" → offer 3-4 options spread across different days, using their preferred time if hinted
+- "2pm", "3pm", any specific time → check if that hour is available on the days shown. If yes, offer it across available days. If outside working hours say so and offer nearest available time
+- "tomorrow at 2pm" → check if tomorrow is in the available days and 2pm is within working hours. If both true, offer it. If tomorrow not available, say so and offer the next available day at that time
+- "afternoon" → offer slots between 12pm-end of day across available days
+- "morning" → offer slots from start of day-12pm
+- "Friday" / any day name → check if that day appears in available days above. If yes show its hours. If no, say it's not available and offer nearest day
+- "next week" → filter to next calendar week's available days
+- Bare number "1","2","3" → they are selecting from the last options you listed — set bookedSlotIndex to the correct index in the full slots array that matches what they picked
+- Pricing → inspections are FREE, work with all insurance companies
 - Can't answer → set needsHumanReview:true
 
-WHEN BOOKING: reply must include the full date, time, and inspector name as confirmation.
-Keep all messages under 300 characters. Be warm and conversational.
+When offering times, list them clearly numbered so homeowner can just reply with a number.
+WHEN BOOKING: confirm with full date, time, and inspector name in the reply.
+Keep messages under 300 characters. Be warm and conversational.
 
-Reply ONLY with this exact JSON (no markdown, no extra text):
+Reply ONLY with this exact JSON (no markdown):
 {"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
 
   const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
@@ -221,7 +234,7 @@ Reply ONLY with this exact JSON (no markdown, no extra text):
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 400,
+      max_tokens: 600,
       system,
       messages: [...history, { role: "user", content: incomingMsg }],
     }),
@@ -321,11 +334,13 @@ export default async function handler(req, res) {
           ? JSON.parse(roofer.inspections || "[]")
           : roofer.inspections) || [])
       : [];
-    const slots = roofer ? buildSlots(roofer, existingInspections) : [];
-    console.log("Slots built:", slots.length, "| Booked inspections:", existingInspections.filter(i=>i.status==="scheduled").length);
+    const slotData = roofer ? buildSlots(roofer, existingInspections) : { slots:[], startHour:8, endHour:17, dur:60, inspector:null };
+    const slots = slotData.slots;
+    const { startHour, endHour, dur } = slotData;
+    console.log("Slots built:", slots.length, "| Hours:", startHour, "-", endHour);
 
     if (autoReply) {
-      aiResult = await generateAIReply(lead, roofer, body, commSettings, slots);
+      aiResult = await generateAIReply(lead, roofer, body, commSettings, slots, startHour, endHour);
       console.log("AI result:", JSON.stringify(aiResult)?.slice(0, 200));
     }
 
