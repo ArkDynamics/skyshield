@@ -3951,6 +3951,22 @@ function StormDetailPanel({storm, leads, roofers, apiKeys, onClose}){
 
 function detailRow(){ return {display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 10px",background:C.surface,borderRadius:6,border:`1px solid ${C.border}`}; }
 
+function zipOnCooldown(zip, zipLeadPulls, scanSettings){
+  const pull=(zipLeadPulls||[]).find(p=>p.zip_code===zip);
+  if(!pull) return false;
+  const months=(scanSettings?.cooldownMonths)||3;
+  const cooldownMs=months*30*24*60*60*1000;
+  return(Date.now()-new Date(pull.last_pulled_at).getTime())<cooldownMs;
+}
+function cooldownRemainingDays(zip, zipLeadPulls, scanSettings){
+  const pull=(zipLeadPulls||[]).find(p=>p.zip_code===zip);
+  if(!pull) return 0;
+  const months=(scanSettings?.cooldownMonths)||3;
+  const cooldownMs=months*30*24*60*60*1000;
+  const elapsed=Date.now()-new Date(pull.last_pulled_at).getTime();
+  return Math.max(0,Math.ceil((cooldownMs-elapsed)/(24*60*60*1000)));
+}
+
 function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,scanSettings,onScanSettingsChange,activities,addActivity,zipTerritories,zipLeadPulls,setZipLeadPulls}){
   const CMD_TABS=["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"];
   const[tab,setTab]=useState(()=>{
@@ -3980,23 +3996,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
   const totalMRR=roofers.filter(r=>r.status==="active").reduce((a,r)=>a+PLAN_PRICES[r.plan],0);
   const pending=leads.filter(l=>l.status==="pending");
 
-  // ── COOLDOWN HELPER ──────────────────────────────────────────────────────
-  function zipOnCooldown(zip){
-    const pull = (zipLeadPulls||[]).find(p=>p.zip_code===zip);
-    if(!pull) return false;
-    const months = scanSettings.cooldownMonths||3;
-    const cooldownMs = months * 30 * 24 * 60 * 60 * 1000;
-    return (Date.now() - new Date(pull.last_pulled_at).getTime()) < cooldownMs;
-  }
-
-  function cooldownRemainingDays(zip){
-    const pull = (zipLeadPulls||[]).find(p=>p.zip_code===zip);
-    if(!pull) return 0;
-    const months = scanSettings.cooldownMonths||3;
-    const cooldownMs = months * 30 * 24 * 60 * 60 * 1000;
-    const elapsed = Date.now() - new Date(pull.last_pulled_at).getTime();
-    return Math.max(0, Math.ceil((cooldownMs - elapsed) / (24*60*60*1000)));
-  }
+  // ── COOLDOWN HELPER (uses outer pure functions) ──────────────────────────
 
   async function recordZipPull(zip, leadCount, stormType){
     const record = { zip_code:zip, last_pulled_at:new Date().toISOString(), lead_count:leadCount, storm_type:stormType };
@@ -4021,7 +4021,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
       : `a ${storm.type.toLowerCase()}`;
 
     // ── COOLDOWN: re-engage existing leads instead of pulling new data ────────
-    if(zipOnCooldown(storm.zip)){
+    if(zipOnCooldown(storm.zip,zipLeadPulls,scanSettings)){
       const existingLeads = leads.filter(l=>l.zip===storm.zip);
 
       // Categorize existing leads
@@ -4058,7 +4058,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
         followedUp++;
       }
 
-      const daysLeft = cooldownRemainingDays(storm.zip);
+      const daysLeft = cooldownRemainingDays(storm.zip,zipLeadPulls,scanSettings);
       addActivity({
         type:"storm",
         message:`ZIP ${storm.zip} on cooldown (${daysLeft}d left) — re-engaged ${reEngaged} pending + ${followedUp} follow-ups · ${toSkip.length} skipped (won/cold/scheduled)`,
@@ -4527,8 +4527,8 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
           {(zipLeadPulls||[]).map(pull=>{
-            const daysLeft=cooldownRemainingDays(pull.zip_code);
-            const onCd=zipOnCooldown(pull.zip_code);
+            const daysLeft=cooldownRemainingDays(pull.zip_code,zipLeadPulls,scanSettings);
+            const onCd=zipOnCooldown(pull.zip_code,zipLeadPulls,scanSettings);
             return(
               <div key={pull.zip_code} style={{display:"flex",alignItems:"center",gap:12,
                 padding:"9px 14px",background:C.surface,borderRadius:8,
