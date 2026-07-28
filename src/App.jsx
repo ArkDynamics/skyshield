@@ -3486,11 +3486,11 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
 function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,addActivity}){
   const isMobile=useIsMobile();
   const[tab,setTab]=useState(()=>{
-    const h=window.location.hash.replace("#","");
+    try{const s=sessionStorage.getItem("roofer_tab");
     const valid=["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"];
-    return valid.find(t=>t.toLowerCase().replace(/[^a-z]/g,"-")===h)||"Overview";
+    return valid.includes(s)?s:"Overview";}catch(e){return "Overview";}
   });
-  function changeTab(t){setTab(t);window.location.hash=t.toLowerCase().replace(/[^a-z]/g,"-");}
+  function changeTab(t){setTab(t);try{sessionStorage.setItem("roofer_tab",t);}catch(e){}}
   const[showAddInspector,setShowAddInspector]=useState(false);
   const[bookingModal,setBookingModal]=useState(null); // {leadToBook} | {existingInspection} | {} for blank manual
   const[editingLead,setEditingLead]=useState(null);
@@ -3941,11 +3941,11 @@ function detailRow(){ return {display:"flex",alignItems:"center",justifyContent:
 
 function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,scanSettings,onScanSettingsChange,activities,addActivity,zipTerritories,zipLeadPulls,setZipLeadPulls}){
   const[tab,setTab]=useState(()=>{
-    const h=window.location.hash.replace("#","");
+    try{const s=sessionStorage.getItem("cmd_tab");
     const valid=["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"];
-    return valid.find(t=>t.toLowerCase().replace(/[^a-z]/g,"-")===h)||"Overview";
+    return valid.includes(s)?s:"Overview";}catch(e){return "Overview";}
   });
-  function changeTab(t){setTab(t);window.location.hash=t.toLowerCase().replace(/[^a-z]/g,"-");}
+  function changeTab(t){setTab(t);try{sessionStorage.setItem("cmd_tab",t);}catch(e){}}
   const[showAddRoofer,setShowAddRoofer]=useState(false);
   const[editingRoofer,setEditingRoofer]=useState(null);
   const[editingLead,setEditingLead]=useState(null);
@@ -6417,11 +6417,11 @@ export default function App(){
   const[storms,setStorms]=useState([]);
   const[apiKeys,setApiKeys]=useState({});
   const[activeSection,setActiveSectionRaw]=useState(()=>{
-    const h=window.location.hash.replace("#","");
+    try{const s=sessionStorage.getItem("admin_section");
     const valid=["Jobs","Command Center","Subscriptions & Billing","API Settings"];
-    return valid.find(s=>s.toLowerCase().replace(/[^a-z&]/g,"-").replace(/--+/g,"-")===h)||"Command Center";
+    return valid.includes(s)?s:"Command Center";}catch(e){return "Command Center";}
   });
-  function setActiveSection(s){ setActiveSectionRaw(s); window.location.hash=s.toLowerCase().replace(/[^a-z&]/g,"-").replace(/--+/g,"-"); }
+  function setActiveSection(s){setActiveSectionRaw(s);try{sessionStorage.setItem("admin_section",s);}catch(e){}}
   const[selectedRoofer,setSelectedRoofer]=useState(null);
   const[mobileNavOpen,setMobileNavOpen]=useState(false);
   const isMobile=useIsMobile();
