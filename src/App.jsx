@@ -1424,11 +1424,12 @@ Always explain in plain English first, then include action blocks. Ask for clari
 
 // ─── MODALS ───────────────────────────────────────────────────────────────────
 function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNotes}){
-  const[msg,setMsg]=useState(""),[notes,setNotes]=useState(lead.notes||""),[editing,setEditing]=useState(false);
+  const[msg,setMsg]=useState(""),[notes,setNotes]=useState(lead?.notes||""),[editing,setEditing]=useState(false);
   const bot=useRef(null);
-  useEffect(()=>bot.current?.scrollIntoView({behavior:"smooth"}),[lead.conversations]);
+  useEffect(()=>bot.current?.scrollIntoView({behavior:"smooth"}),[lead?.conversations]);
 
-  // Find storms that match this lead's ZIP
+  if(!lead||!lead.id) return null;
+
   const relatedStorms=(storms||[]).filter(s=>s.zip===lead.zip);
 
   // Show property map for booked+ leads that have an address
@@ -1436,7 +1437,7 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
   const showStreetView = BOOKED_STAGES.includes(lead.status) && lead.address && lead.zip;
   const fullAddress = showStreetView ? `${lead.address}, ${lead.zip}` : null;
   const GOOGLE_MAPS_KEY = "AIzaSyAtr2wsraqDjd49KLRzqtebB7F9tVg-lvk";
-  const mapsEmbedUrl = fullAddress
+  const mapsEmbedUrl = (showStreetView && fullAddress)
     ? `https://www.google.com/maps/embed/v1/streetview?key=${GOOGLE_MAPS_KEY}&location=${encodeURIComponent(fullAddress)}&fov=80&pitch=0`
     : null;
 
@@ -1453,7 +1454,7 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
           letterSpacing:"0.07em",padding:"6px 10px",background:C.surface,
           borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:6}}>
           <span>◆</span> Property — {fullAddress}
-          <a href={`https://www.google.com/maps/search/${encodeURIComponent(fullAddress)}`}
+          <a href={`https://www.google.com/maps/search/${encodeURIComponent(fullAddress||"")}`}
             target="_blank" rel="noreferrer"
             style={{marginLeft:"auto",fontSize:10,color:C.orange,textDecoration:"none"}}>
             Open in Maps →
@@ -1503,7 +1504,7 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
         {editing?<Textarea value={notes} onChange={setNotes} placeholder="Add notes about this lead..." rows={2}/>:<div style={{fontSize:13,color:notes?C.text:C.textMuted,lineHeight:1.6}}>{notes||"No notes yet — click Edit to add."}</div>}
       </div>
       <div style={{height:270,overflow:"auto",display:"flex",flexDirection:"column",gap:8,padding:2}}>
-        {lead.conversations.length===0&&<div style={{textAlign:"center",color:C.textMuted,padding:40,fontSize:13}}>No messages yet.</div>}
+        {(lead.conversations||[]).length===0&&<div style={{textAlign:"center",color:C.textMuted,padding:40,fontSize:13}}>No messages yet.</div>}
         {(lead.conversations||[]).map((c,i)=><div key={i} style={{display:"flex",flexDirection:"column",alignItems:c.role==="ai"?"flex-start":"flex-end"}}>
           <div style={{padding:"8px 12px",borderRadius:8,fontSize:13,lineHeight:1.6,maxWidth:"82%",background:c.role==="ai"?C.blueDim:C.greenDim,border:`1px solid ${c.role==="ai"?C.blue+"28":C.green+"28"}`,whiteSpace:"pre-wrap"}}>{c.msg}</div>
           <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{c.role==="ai"?"AI Agent":"Lead"} · {c.ts}</div>
@@ -3617,7 +3618,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
         }
       }}/>}
     {editingLead&&<EditLeadModal lead={editingLead} roofers={[roofer]} onClose={()=>setEditingLead(null)} onSave={l=>onUpdate("edit_lead",{lead:l})}/>}
-    {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofer} storms={[]} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
+    {viewingConvo&&viewingConvo.id&&<ConversationModal lead={viewingConvo} roofer={roofer} storms={[]} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
     <Tabs tabs={["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={changeTab}/>
