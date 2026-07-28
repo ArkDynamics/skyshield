@@ -3485,7 +3485,12 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
 
 function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,addActivity}){
   const isMobile=useIsMobile();
-  const[tab,setTab]=useState("Overview");
+  const[tab,setTab]=useState(()=>{
+    const h=window.location.hash.replace("#","");
+    const valid=["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"];
+    return valid.find(t=>t.toLowerCase().replace(/[^a-z]/g,"-")===h)||"Overview";
+  });
+  function changeTab(t){setTab(t);window.location.hash=t.toLowerCase().replace(/[^a-z]/g,"-");}
   const[showAddInspector,setShowAddInspector]=useState(false);
   const[bookingModal,setBookingModal]=useState(null); // {leadToBook} | {existingInspection} | {} for blank manual
   const[editingLead,setEditingLead]=useState(null);
@@ -3572,7 +3577,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
     {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofer} storms={[]} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
-    <Tabs tabs={["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={setTab}/>
+    <Tabs tabs={["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={changeTab}/>
 
     {/* Priority conversations banner — shows when AI flagged leads need human response */}
     {(()=>{
@@ -3935,7 +3940,12 @@ function StormDetailPanel({storm, leads, roofers, apiKeys, onClose}){
 function detailRow(){ return {display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 10px",background:C.surface,borderRadius:6,border:`1px solid ${C.border}`}; }
 
 function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,scanSettings,onScanSettingsChange,activities,addActivity,zipTerritories,zipLeadPulls,setZipLeadPulls}){
-  const[tab,setTab]=useState("Overview");
+  const[tab,setTab]=useState(()=>{
+    const h=window.location.hash.replace("#","");
+    const valid=["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"];
+    return valid.find(t=>t.toLowerCase().replace(/[^a-z]/g,"-")===h)||"Overview";
+  });
+  function changeTab(t){setTab(t);window.location.hash=t.toLowerCase().replace(/[^a-z]/g,"-");}
   const[showAddRoofer,setShowAddRoofer]=useState(false);
   const[editingRoofer,setEditingRoofer]=useState(null);
   const[editingLead,setEditingLead]=useState(null);
@@ -4309,7 +4319,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
     {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofers.find(r=>r.id===viewingConvo.rooferId)} storms={storms} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
-    <Tabs tabs={["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"]} active={tab} onChange={setTab}/>
+    <Tabs tabs={["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"]} active={tab} onChange={changeTab}/>
 
     {tab==="Overview"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:12}}>
@@ -6406,7 +6416,12 @@ export default function App(){
   const[leads,setLeads]=useState([]);
   const[storms,setStorms]=useState([]);
   const[apiKeys,setApiKeys]=useState({});
-  const[activeSection,setActiveSection]=useState("Command Center");
+  const[activeSection,setActiveSectionRaw]=useState(()=>{
+    const h=window.location.hash.replace("#","");
+    const valid=["Jobs","Command Center","Subscriptions & Billing","API Settings"];
+    return valid.find(s=>s.toLowerCase().replace(/[^a-z&]/g,"-").replace(/--+/g,"-")===h)||"Command Center";
+  });
+  function setActiveSection(s){ setActiveSectionRaw(s); window.location.hash=s.toLowerCase().replace(/[^a-z&]/g,"-").replace(/--+/g,"-"); }
   const[selectedRoofer,setSelectedRoofer]=useState(null);
   const[mobileNavOpen,setMobileNavOpen]=useState(false);
   const isMobile=useIsMobile();
