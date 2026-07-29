@@ -358,12 +358,44 @@ export default async function handler(req, res) {
     // 7. Handle booking
     let patchStatus = newStatus;
     let patchNotes  = lead.notes || "";
+    let bookedSlot  = null;
 
     if (aiResult?.bookedSlotIndex !== null && aiResult?.bookedSlotIndex !== undefined && slots.length > 0) {
-      const slot = slots[aiResult.bookedSlotIndex] ?? slots[0];
+      bookedSlot  = slots[aiResult.bookedSlotIndex] ?? slots[0];
       patchStatus = "scheduled";
-      patchNotes  = (patchNotes + ` | AI booked: ${slot.label}`).trim();
-      console.log(`✓ Booking slot ${aiResult.bookedSlotIndex}: ${slot.label}`);
+      patchNotes  = (patchNotes + ` | AI booked: ${bookedSlot.label}`).trim();
+      console.log(`✓ Booking slot ${aiResult.bookedSlotIndex}: ${bookedSlot.label}`);
+
+      // Create a real inspection record on the roofer
+      if (bookedSlot && roofer) {
+        const inspection = {
+          id: "ins_" + Date.now(),
+          client: lead.homeowner || "Unknown",
+          address: lead.address ? `${lead.address}, ${lead.zip || ""}` : (lead.zip || ""),
+          phone: lead.phone || fromNumber,
+          startISO: bookedSlot.startISO,
+          endISO: bookedSlot.endISO,
+          inspectorId: bookedSlot.inspectorId || null,
+          inspector: bookedSlot.inspectorName || "Inspector",
+          status: "scheduled",
+          source: "ai_sms",
+          leadId: lead.id,
+          createdAt: new Date().toISOString(),
+        };
+
+        // Append to roofer's inspections array in Supabase
+        const updatedInspections = [...existingInspections, inspection];
+        await sbPatch("roofers", `id=eq.${roofer.id}`, {
+          inspections: updatedInspections,
+        });
+        console.log(`✓ Inspection created: ${inspection.id} for ${inspection.client} on ${bookedSlot.label}`);
+
+        // Notify the roofer by SMS
+        if (twilioKeys?.sid && twilioKeys?.token && roofer.phone) {
+          const notifyMsg = `SkyShield: ${lead.homeowner} booked! ${bookedSlot.label.split(" (")[0]}. Check your calendar.`;
+          await sendSMS(twilioKeys.sid, twilioKeys.token, toNumber, roofer.phone, notifyMsg);
+        }
+      }
     }
 
     if (aiResult?.wantsCustomTime && aiResult?.preferredTime) {
@@ -372,7 +404,6 @@ export default async function handler(req, res) {
 
     if (aiResult?.needsHumanReview) {
       patchNotes = (patchNotes + " ⚠ Flagged for human review.").trim();
-      // Text the roofer urgently
       if (roofer?.phone && twilioKeys?.sid) {
         const urgentMsg = `SkyShield URGENT: ${lead.homeowner} (${lead.phone}) needs your personal reply. Open SkyShield to respond.`;
         await sendSMS(twilioKeys.sid, twilioKeys.token, toNumber, roofer.phone, urgentMsg);
