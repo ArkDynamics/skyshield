@@ -219,7 +219,7 @@ async function generateAIReply(lead, roofer, incomingMsg, commSettings, slots, s
 
 GOAL: book or reschedule a free roof inspection directly in this conversation.
 
-${isScheduled && existingBooking ? `CURRENT APPOINTMENT: ${existingBooking}. The homeowner may be asking to reschedule this.` : ""}
+${isScheduled && existingBooking ? `CURRENT APPOINTMENT: ${existingBooking}. The homeowner may be asking to reschedule or cancel this.` : ""}
 ${requireAdult ? `ADULT PRESENCE: Confirm someone 18+ will be home before booking. Current status: ${adultStatus}.` : ""}
 
 WORKING HOURS: ${startLabel} to ${endLabel} weekdays. Any time within these hours on an available day can be offered.
@@ -230,6 +230,7 @@ ${slotSummary || "No availability right now — ask for their preferred time and
 HOW TO RESPOND:
 - Interest / "yes" → offer 3-4 options spread across different days
 - "reschedule", "change my appointment", "can we move it" → acknowledge current booking, offer new slots, set isReschedule:true
+- "cancel", "cancel my appointment", "don't come", "never mind", "I changed my mind" → acknowledge cancellation warmly, set isCancelled:true, do NOT offer new times unless they ask
 - "2pm", "3pm", any specific time → check if that hour is within working hours and available. Offer it across available days
 - "tomorrow at 2pm" → check if tomorrow is available and 2pm is within hours. If yes, offer it
 - "afternoon" → offer slots 12pm-end of day
@@ -242,10 +243,11 @@ HOW TO RESPOND:
 
 When offering times, list them clearly numbered.
 WHEN BOOKING/RESCHEDULING: confirm with full date, time, and inspector name.
+WHEN CANCELLING: be warm, say you're sorry to hear it, let them know they can reach out anytime if they change their mind.
 Keep messages under 300 characters. Be warm and conversational.
 
 Reply ONLY with this exact JSON (no markdown):
-{"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"isReschedule":false,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
+{"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"isReschedule":false,"isCancelled":false,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
 
   const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -278,6 +280,7 @@ Reply ONLY with this exact JSON (no markdown):
       adultConfirmed:  ["confirmed","denied","unconfirmed"].includes(parsed.adultConfirmed) ? parsed.adultConfirmed : adultStatus,
       bookedSlotIndex: (typeof parsed.bookedSlotIndex === "number") ? parsed.bookedSlotIndex : null,
       isReschedule:    !!parsed.isReschedule,
+      isCancelled:     !!parsed.isCancelled,
       wantsCustomTime: !!parsed.wantsCustomTime,
       preferredTime:   parsed.preferredTime || null,
       needsHumanReview: !!parsed.needsHumanReview,
@@ -433,6 +436,27 @@ export default async function handler(req, res) {
           const action2 = aiResult.isReschedule ? "rescheduled" : "booked";
           const notifyMsg = `SkyShield: ${lead.homeowner} ${action2}! ${bookedSlot.label.split(" (")[0]}. Check your calendar.`;
           await sendSMS(twilioKeys.sid, twilioKeys.token, toNumber, roofer.phone, notifyMsg);
+        }
+      }
+    }
+
+    // Handle cancellation
+    if (aiResult?.isCancelled) {
+      patchStatus = "cold";
+      patchNotes  = (patchNotes + " | Cancelled by homeowner via SMS.").trim();
+
+      if (roofer) {
+        // Remove inspection from calendar
+        const updatedInspections = existingInspections.filter(i =>
+          i.leadId !== lead.id && i.client !== lead.homeowner
+        );
+        await sbPatch("roofers", `id=eq.${roofer.id}`, { inspections: updatedInspections });
+        console.log(`✓ Removed inspection for ${lead.homeowner} — cancelled`);
+
+        // Notify roofer
+        if (twilioKeys?.sid && twilioKeys?.token && roofer.phone) {
+          await sendSMS(twilioKeys.sid, twilioKeys.token, toNumber, roofer.phone,
+            `SkyShield: ${lead.homeowner} cancelled their inspection. Lead marked as cold.`);
         }
       }
     }
