@@ -3258,12 +3258,19 @@ function LeadRow({lead,roofers,onSMS,onBook,onEdit,onDelete,onViewConvo,onLogRev
 
 // ─── ROOFER DASHBOARD ─────────────────────────────────────────────────────────
 // ─── CALENDAR VIEW ───────────────────────────────────────────────────────────
-function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus, onDelete, leads}){
+function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus, onDelete, leads, onAddBlock, onDeleteBlock}){
   const today = new Date();
   const[viewDate,setViewDate]=useState(new Date(today.getFullYear(),today.getMonth(),1));
   const[selectedDate,setSelectedDate]=useState(null);
-  const[view,setView]=useState("month"); // month | week | list
+  const[view,setView]=useState("month"); // month | list
+  const[showBlockModal,setShowBlockModal]=useState(false);
+  const[blockDate,setBlockDate]=useState("");
+  const[blockStart,setBlockStart]=useState("09:00");
+  const[blockEnd,setBlockEnd]=useState("17:00");
+  const[blockNote,setBlockNote]=useState("");
+  const[blockAllDay,setBlockAllDay]=useState(false);
   const isMobile=useIsMobile();
+  const blocks = roofer.timeBlocks||[];
 
   const year  = viewDate.getFullYear();
   const month = viewDate.getMonth();
@@ -3321,11 +3328,62 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
             ))}
           </div>
         </div>
-        <Btn variant="primary" onClick={onBook}
-          disabled={(roofer.inspectors||[]).length===0}>
-          + New Appointment
-        </Btn>
+        <div style={flex(8)}>
+          <Btn variant="primary" onClick={onBook}
+            disabled={(roofer.inspectors||[]).length===0}>
+            + New Appointment
+          </Btn>
+          <Btn variant="ghost" onClick={()=>{
+            setBlockDate(selectedDate||new Date().toISOString().split("T")[0]);
+            setShowBlockModal(true);
+          }}>⊘ Block Time</Btn>
+        </div>
       </div>
+
+      {/* Block Time Modal */}
+      {showBlockModal&&<Modal title="Block Time" onClose={()=>setShowBlockModal(false)}>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{fontSize:12,color:C.textSub,lineHeight:1.6,padding:"8px 12px",
+            background:C.orangeDim,borderRadius:7,border:`1px solid ${C.orange}22`}}>
+            Blocked times prevent the AI from offering these slots to homeowners.
+          </div>
+          <Input label="Date" type="date" value={blockDate} onChange={setBlockDate}/>
+          <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+            background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+            <span style={{fontSize:13,color:C.text,fontWeight:600}}>All Day</span>
+            <button onClick={()=>setBlockAllDay(d=>!d)} style={{
+              width:40,height:22,borderRadius:11,border:"none",cursor:"pointer",
+              background:blockAllDay?C.orange:C.border,position:"relative",flexShrink:0,
+            }}>
+              <div style={{width:18,height:18,borderRadius:"50%",background:"#fff",
+                position:"absolute",top:2,left:blockAllDay?20:2,transition:"left 0.15s"}}/>
+            </button>
+          </div>
+          {!blockAllDay&&<div style={grid("1fr 1fr",12)}>
+            <Input label="Start Time" type="time" value={blockStart} onChange={setBlockStart}/>
+            <Input label="End Time" type="time" value={blockEnd} onChange={setBlockEnd}/>
+          </div>}
+          <Input label="Reason (optional)" value={blockNote} onChange={setBlockNote} placeholder="Lunch, personal, out of office..."/>
+          <div style={{...flex(8,"center","flex-end"),marginTop:4}}>
+            <Btn onClick={()=>setShowBlockModal(false)}>Cancel</Btn>
+            <Btn variant="primary" onClick={()=>{
+              if(!blockDate){alert("Please select a date.");return;}
+              const block={
+                id:"blk_"+Date.now(),
+                date:blockDate,
+                startTime:blockAllDay?"00:00":blockStart,
+                endTime:blockAllDay?"23:59":blockEnd,
+                allDay:blockAllDay,
+                note:blockNote||"Blocked",
+                createdAt:new Date().toISOString(),
+              };
+              onAddBlock(block);
+              setShowBlockModal(false);
+              setBlockNote("");
+            }}>Add Block</Btn>
+          </div>
+        </div>
+      </Modal>}
 
       {view==="month"&&<>
         {/* Month nav */}
@@ -3351,6 +3409,7 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
             {cells.map((d,i)=>{
               const key = d?dateKey(d):null;
               const insps = d?(groupedIns[key]||[]):[];
+              const dayBlocks = d?(blocks||[]).filter(b=>b.date===key):[];
               const todayCell = isToday(d);
               const selectedCell = isSelected(d);
               const hasIns = insps.length>0;
@@ -3386,6 +3445,15 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
                         overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
                         maxWidth:"100%",
                       }}>{isMobile?"•":ins.client?.split(" ")[0]||"Appt"}</div>
+                    ))}
+                    {dayBlocks.slice(0,2).map((blk,bi)=>(
+                      <div key={"blk"+bi} style={{
+                        fontSize:9,fontWeight:600,
+                        color:"#fff",background:"rgba(120,120,120,0.5)",
+                        borderRadius:3,padding:"1px 4px",marginBottom:1,
+                        overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
+                        maxWidth:"100%",
+                      }}>{isMobile?"⊘":blk.allDay?"⊘ All Day":"⊘ "+blk.note.slice(0,8)}</div>
                     ))}
                     {insps.length>3&&<div style={{fontSize:9,color:C.textMuted}}>+{insps.length-3} more</div>}
                   </>}
@@ -3450,6 +3518,26 @@ function CalendarView({roofer, groupedIns, onBook, onReschedule, onUpdateStatus,
               </div>
             </div>
           }
+          {/* Blocks for selected day */}
+          {(blocks||[]).filter(b=>b.date===selectedDate).length>0&&<div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+            <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",marginBottom:8}}>Time Blocks</div>
+            {(blocks||[]).filter(b=>b.date===selectedDate).map(blk=>(
+              <div key={blk.id} style={{display:"flex",alignItems:"center",gap:10,
+                padding:"8px 12px",background:"rgba(120,120,120,0.12)",
+                borderRadius:8,border:"1px solid rgba(120,120,120,0.25)",marginBottom:6}}>
+                <div style={{fontSize:14,color:C.textMuted}}>⊘</div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,fontWeight:600,color:C.textSub}}>
+                    {blk.allDay?"All Day":blk.startTime+" – "+blk.endTime}
+                  </div>
+                  <div style={{fontSize:11,color:C.textMuted}}>{blk.note}</div>
+                </div>
+                <Btn small variant="danger" onClick={()=>{
+                  if(window.confirm("Remove this time block?")) onDeleteBlock(blk.id);
+                }}>Remove</Btn>
+              </div>
+            ))}
+          </div>}
         </div>}
       </>}
 
@@ -3708,6 +3796,8 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
       onReschedule={ins=>setBookingModal({existingInspection:ins})}
       onUpdateStatus={(inspectionId,status)=>onUpdate("update_inspection_status",{rooferId:roofer.id,inspectionId,status})}
       onDelete={inspectionId=>onUpdate("delete_inspection",{rooferId:roofer.id,inspectionId})}
+      onAddBlock={block=>onUpdate("add_time_block",{rooferId:roofer.id,block})}
+      onDeleteBlock={blockId=>onUpdate("delete_time_block",{rooferId:roofer.id,blockId})}
     />}
 
     {tab==="Schedule"&&<ScheduleSettingsPanel roofer={roofer} onSave={settings=>onUpdate("update_schedule_settings",{rooferId:roofer.id,settings})}/>}
@@ -6713,6 +6803,8 @@ export default function App(){
       case "log_revenue":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,revenue:r.revenue+payload.entry.amount,revenueLog:[...(r.revenueLog||[]),payload.entry]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,revenue:p.revenue+payload.entry.amount,revenueLog:[...(p.revenueLog||[]),payload.entry]}:p);break;
       case "update_inspection_status":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:r.inspections.map(i=>i.id===payload.inspectionId?{...i,status:payload.status}:i)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:p.inspections.map(i=>i.id===payload.inspectionId?{...i,status:payload.status}:i)}:p);break;
       case "delete_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:(r.inspections||[]).filter(i=>i.id!==payload.inspectionId)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:(p.inspections||[]).filter(i=>i.id!==payload.inspectionId)}:p);break;
+      case "add_time_block":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,timeBlocks:[...(r.timeBlocks||[]),payload.block]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,timeBlocks:[...(p.timeBlocks||[]),payload.block]}:p);break;
+      case "delete_time_block":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,timeBlocks:(r.timeBlocks||[]).filter(b=>b.id!==payload.blockId)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,timeBlocks:(p.timeBlocks||[]).filter(b=>b.id!==payload.blockId)}:p);break;
       case "add_inspector":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspectors:[...r.inspectors,payload.inspector]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspectors:[...p.inspectors,payload.inspector]}:p);break;
       case "add_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:[...r.inspections,payload.inspection]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:[...p.inspections,payload.inspection]}:p);break;
       case "reschedule_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:r.inspections.map(i=>i.id===payload.inspection.id?{...i,...payload.inspection}:i)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:p.inspections.map(i=>i.id===payload.inspection.id?{...i,...payload.inspection}:i)}:p);break;

@@ -102,6 +102,22 @@ function buildSlots(roofer, existingInspections = []) {
       .filter(Boolean)
   );
 
+  // Parse time blocks
+  const rawBlocks = roofer.time_blocks || roofer.timeBlocks;
+  const timeBlocks = rawBlocks
+    ? (Array.isArray(rawBlocks) ? rawBlocks : (typeof rawBlocks === "string" ? JSON.parse(rawBlocks) : []))
+    : [];
+
+  function isBlocked(dateStr, hour) {
+    return timeBlocks.some(blk => {
+      if (blk.date !== dateStr) return false;
+      if (blk.allDay) return true;
+      const blkStart = parseInt((blk.startTime || "00:00").split(":")[0], 10);
+      const blkEnd   = parseInt((blk.endTime   || "23:59").split(":")[0], 10);
+      return hour >= blkStart && hour < blkEnd;
+    });
+  }
+
   const slots = [];
   const d = new Date();
   d.setDate(d.getDate() + 1);
@@ -128,6 +144,7 @@ function buildSlots(roofer, existingInspections = []) {
       const slotKey  = startISO.slice(0, 16);
 
       if (bookedTimes.has(slotKey)) continue;
+      if (isBlocked(dateStr, hour)) continue;
 
       const endISO = new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
       const h12    = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
@@ -195,10 +212,14 @@ async function generateAIReply(lead, roofer, incomingMsg, commSettings, slots, s
     .map(([date, info]) => `${info.label}: ${info.hours.join(", ")}`)
     .join("\n");
 
+  const isScheduled = lead.status === "scheduled";
+  const existingBooking = isScheduled ? (lead.notes || "").match(/AI booked: ([^|]+)/)?.[1]?.trim() : null;
+
   const system = `You are an SMS scheduling assistant for ${roofer?.name || "a roofing company"} texting homeowner ${lead.homeowner || "the homeowner"} about their storm-damaged roof.
 
-GOAL: book a free roof inspection directly in this conversation.
+GOAL: book or reschedule a free roof inspection directly in this conversation.
 
+${isScheduled && existingBooking ? `CURRENT APPOINTMENT: ${existingBooking}. The homeowner may be asking to reschedule this.` : ""}
 ${requireAdult ? `ADULT PRESENCE: Confirm someone 18+ will be home before booking. Current status: ${adultStatus}.` : ""}
 
 WORKING HOURS: ${startLabel} to ${endLabel} weekdays. Any time within these hours on an available day can be offered.
@@ -207,23 +228,24 @@ AVAILABLE DAYS AND TIMES (every hour shown is open and unbooked):
 ${slotSummary || "No availability right now — ask for their preferred time and set wantsCustomTime:true"}
 
 HOW TO RESPOND:
-- Interest / "yes" → offer 3-4 options spread across different days, using their preferred time if hinted
-- "2pm", "3pm", any specific time → check if that hour is available on the days shown. If yes, offer it across available days. If outside working hours say so and offer nearest available time
-- "tomorrow at 2pm" → check if tomorrow is in the available days and 2pm is within working hours. If both true, offer it. If tomorrow not available, say so and offer the next available day at that time
-- "afternoon" → offer slots between 12pm-end of day across available days
-- "morning" → offer slots from start of day-12pm
-- "Friday" / any day name → check if that day appears in available days above. If yes show its hours. If no, say it's not available and offer nearest day
-- "next week" → filter to next calendar week's available days
-- Bare number "1","2","3" → they are selecting from the last options you listed — set bookedSlotIndex to the correct index in the full slots array that matches what they picked
-- Pricing → inspections are FREE, work with all insurance companies
+- Interest / "yes" → offer 3-4 options spread across different days
+- "reschedule", "change my appointment", "can we move it" → acknowledge current booking, offer new slots, set isReschedule:true
+- "2pm", "3pm", any specific time → check if that hour is within working hours and available. Offer it across available days
+- "tomorrow at 2pm" → check if tomorrow is available and 2pm is within hours. If yes, offer it
+- "afternoon" → offer slots 12pm-end of day
+- "morning" → offer slots start-12pm
+- "Friday" / day name → check available days. If not available, offer nearest day
+- "next week" → filter to next calendar week
+- Bare number "1","2","3" → selecting from last listed options — set bookedSlotIndex to correct 0-based index in full slots array
+- Pricing → FREE inspections, work with all insurance companies
 - Can't answer → set needsHumanReview:true
 
-When offering times, list them clearly numbered so homeowner can just reply with a number.
-WHEN BOOKING: confirm with full date, time, and inspector name in the reply.
+When offering times, list them clearly numbered.
+WHEN BOOKING/RESCHEDULING: confirm with full date, time, and inspector name.
 Keep messages under 300 characters. Be warm and conversational.
 
 Reply ONLY with this exact JSON (no markdown):
-{"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
+{"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"isReschedule":false,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
 
   const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -255,6 +277,7 @@ Reply ONLY with this exact JSON (no markdown):
       reply:           parsed.reply || null,
       adultConfirmed:  ["confirmed","denied","unconfirmed"].includes(parsed.adultConfirmed) ? parsed.adultConfirmed : adultStatus,
       bookedSlotIndex: (typeof parsed.bookedSlotIndex === "number") ? parsed.bookedSlotIndex : null,
+      isReschedule:    !!parsed.isReschedule,
       wantsCustomTime: !!parsed.wantsCustomTime,
       preferredTime:   parsed.preferredTime || null,
       needsHumanReview: !!parsed.needsHumanReview,
@@ -328,7 +351,7 @@ export default async function handler(req, res) {
     console.log("Auto-reply enabled:", autoReply, "| Roofer:", roofer?.name);
 
     let aiResult = null;
-    // Fetch roofer's existing inspections to exclude booked slots
+    // Fetch roofer's existing inspections and time blocks to exclude from slots
     const existingInspections = roofer
       ? ((typeof roofer.inspections === "string"
           ? JSON.parse(roofer.inspections || "[]")
@@ -363,12 +386,12 @@ export default async function handler(req, res) {
     if (aiResult?.bookedSlotIndex !== null && aiResult?.bookedSlotIndex !== undefined && slots.length > 0) {
       bookedSlot  = slots[aiResult.bookedSlotIndex] ?? slots[0];
       patchStatus = "scheduled";
-      patchNotes  = (patchNotes + ` | AI booked: ${bookedSlot.label}`).trim();
-      console.log(`✓ Booking slot ${aiResult.bookedSlotIndex}: ${bookedSlot.label}`);
+      const action = aiResult.isReschedule ? "AI rescheduled" : "AI booked";
+      patchNotes  = (patchNotes + ` | ${action}: ${bookedSlot.label}`).trim();
+      console.log(`✓ ${action} slot ${aiResult.bookedSlotIndex}: ${bookedSlot.label}`);
 
-      // Create a real inspection record on the roofer
       if (bookedSlot && roofer) {
-        const inspection = {
+        const newInspection = {
           id: "ins_" + Date.now(),
           client: lead.homeowner || "Unknown",
           address: lead.address ? `${lead.address}, ${lead.zip || ""}` : (lead.zip || ""),
@@ -383,16 +406,32 @@ export default async function handler(req, res) {
           createdAt: new Date().toISOString(),
         };
 
-        // Append to roofer's inspections array in Supabase
-        const updatedInspections = [...existingInspections, inspection];
-        await sbPatch("roofers", `id=eq.${roofer.id}`, {
-          inspections: updatedInspections,
-        });
-        console.log(`✓ Inspection created: ${inspection.id} for ${inspection.client} on ${bookedSlot.label}`);
+        let updatedInspections;
+        if (aiResult.isReschedule) {
+          // Find existing inspection for this lead and update it
+          const existingIdx = existingInspections.findIndex(i => i.leadId === lead.id || i.client === lead.homeowner);
+          if (existingIdx >= 0) {
+            updatedInspections = existingInspections.map((ins, idx) =>
+              idx === existingIdx
+                ? { ...ins, startISO: bookedSlot.startISO, endISO: bookedSlot.endISO, status: "rescheduled" }
+                : ins
+            );
+            console.log(`✓ Rescheduled existing inspection ${existingInspections[existingIdx].id}`);
+          } else {
+            // No existing found — create new
+            updatedInspections = [...existingInspections, newInspection];
+          }
+        } else {
+          updatedInspections = [...existingInspections, newInspection];
+        }
 
-        // Notify the roofer by SMS
+        await sbPatch("roofers", `id=eq.${roofer.id}`, { inspections: updatedInspections });
+        console.log(`✓ Inspection record saved to roofer`);
+
+        // Notify roofer by SMS
         if (twilioKeys?.sid && twilioKeys?.token && roofer.phone) {
-          const notifyMsg = `SkyShield: ${lead.homeowner} booked! ${bookedSlot.label.split(" (")[0]}. Check your calendar.`;
+          const action2 = aiResult.isReschedule ? "rescheduled" : "booked";
+          const notifyMsg = `SkyShield: ${lead.homeowner} ${action2}! ${bookedSlot.label.split(" (")[0]}. Check your calendar.`;
           await sendSMS(twilioKeys.sid, twilioKeys.token, toNumber, roofer.phone, notifyMsg);
         }
       }
