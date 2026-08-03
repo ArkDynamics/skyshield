@@ -242,12 +242,12 @@ HOW TO RESPOND:
 - Can't answer → set needsHumanReview:true
 
 When offering times, list them clearly numbered.
-WHEN BOOKING/RESCHEDULING: set bookedSlotISO to the exact startISO of the chosen slot from the available list above. Also confirm with full date, time, and inspector name in reply.
-WHEN CANCELLING: be warm, say you're sorry to hear it, let them know they can reach out anytime.
+WHEN BOOKING/RESCHEDULING: confirm with full date, time, and inspector name.
+WHEN CANCELLING: be warm, say you're sorry to hear it, let them know they can reach out anytime if they change their mind.
 Keep messages under 300 characters. Be warm and conversational.
 
 Reply ONLY with this exact JSON (no markdown):
-{"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"bookedSlotISO":null,"isReschedule":false,"isCancelled":false,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
+{"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"isReschedule":false,"isCancelled":false,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
 
   const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -274,17 +274,11 @@ Reply ONLY with this exact JSON (no markdown):
   console.log("Claude raw response:", raw.slice(0, 200));
 
   try {
-    // Strip markdown code fences if present
-    const cleaned = raw.replace(/```json\n?|```\n?/g, "").trim();
-    // Find the JSON object even if there's extra text around it
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON object found");
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
     return {
       reply:           parsed.reply || null,
       adultConfirmed:  ["confirmed","denied","unconfirmed"].includes(parsed.adultConfirmed) ? parsed.adultConfirmed : adultStatus,
       bookedSlotIndex: (typeof parsed.bookedSlotIndex === "number") ? parsed.bookedSlotIndex : null,
-      bookedSlotISO:   parsed.bookedSlotISO || null,
       isReschedule:    !!parsed.isReschedule,
       isCancelled:     !!parsed.isCancelled,
       wantsCustomTime: !!parsed.wantsCustomTime,
@@ -293,11 +287,8 @@ Reply ONLY with this exact JSON (no markdown):
     };
   } catch (e) {
     console.error("JSON parse failed:", e.message, "raw:", raw.slice(0, 300));
-    // If raw looks like it contains a reply field, extract it
-    const replyMatch = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    const extractedReply = replyMatch ? replyMatch[1].replace(/\\n/g,"\n").replace(/\\"/g,'"') : null;
-    // Never send raw JSON to the homeowner
-    return { reply: extractedReply, adultConfirmed: adultStatus, bookedSlotIndex: null, needsHumanReview: false };
+    // Return raw as reply so at least something goes out
+    return { reply: raw.slice(0, 300) || null, adultConfirmed: adultStatus, bookedSlotIndex: null, needsHumanReview: false };
   }
 }
 
@@ -395,17 +386,8 @@ export default async function handler(req, res) {
     let patchNotes  = lead.notes || "";
     let bookedSlot  = null;
 
-    if ((aiResult?.bookedSlotIndex !== null && aiResult?.bookedSlotIndex !== undefined && slots.length > 0)
-       || (aiResult?.bookedSlotISO && slots.length > 0)) {
-      // Prefer ISO-based matching over index — much more accurate
-      if (aiResult.bookedSlotISO) {
-        bookedSlot = slots.find(s => s.startISO === aiResult.bookedSlotISO)
-          || slots.find(s => s.startISO.startsWith(aiResult.bookedSlotISO.slice(0,16)))
-          || (aiResult.bookedSlotIndex !== null ? slots[aiResult.bookedSlotIndex] : null)
-          || slots[0];
-      } else {
-        bookedSlot = slots[aiResult.bookedSlotIndex] ?? slots[0];
-      }
+    if (aiResult?.bookedSlotIndex !== null && aiResult?.bookedSlotIndex !== undefined && slots.length > 0) {
+      bookedSlot  = slots[aiResult.bookedSlotIndex] ?? slots[0];
       patchStatus = "scheduled";
       const action = aiResult.isReschedule ? "AI rescheduled" : "AI booked";
       patchNotes  = (patchNotes + ` | ${action}: ${bookedSlot.label}`).trim();
