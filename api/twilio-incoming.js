@@ -90,9 +90,20 @@ function buildSlots(roofer, existingInspections = []) {
   const inspector = inspectors[0];
   if (!inspector) return { slots: [], startHour: 8, endHour: 17, dur: 60 };
 
-  const startHour = parseInt((sched.startTime || "08:00").split(":")[0], 10);
-  const endHour   = parseInt((sched.endTime   || "17:00").split(":")[0], 10);
-  const dur       = sched.durationMins || 60;
+  const startHour = inspector.schedule
+    ? parseInt((inspector.schedule.startTime || "08:00").split(":")[0], 10)
+    : parseInt((sched.startTime || "08:00").split(":")[0], 10);
+  const endHour = inspector.schedule
+    ? parseInt((inspector.schedule.endTime || "17:00").split(":")[0], 10)
+    : parseInt((sched.endTime || "17:00").split(":")[0], 10);
+  const dur = sched.durationMins || 60;
+
+  // Get working days from inspector schedule or default weekdays
+  const inspDays = inspector.schedule?.days;
+  function isDayActive(dayKey){
+    if(inspDays) return inspDays[dayKey] !== false && (inspDays[dayKey] || ["mon","tue","wed","thu","fri"].includes(dayKey));
+    return ["mon","tue","wed","thu","fri"].includes(dayKey);
+  }
 
   // Build set of already-booked start times
   const bookedTimes = new Set(
@@ -130,7 +141,8 @@ function buildSlots(roofer, existingInspections = []) {
     const dayKey = dayNames[dow];
     const daySchedule = sched.days?.[dayKey];
 
-    if (dow === 0 || dow === 6 || daySchedule?.open === false) {
+    // Skip if inspector is off this day
+    if (!isDayActive(dayKey) || daySchedule?.open === false) {
       d.setDate(d.getDate() + 1);
       continue;
     }

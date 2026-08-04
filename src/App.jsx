@@ -723,18 +723,55 @@ function hasConflict(inspections,inspectorId,startISO,endISO,bufferMins,excludeI
 // Computes all open slots for one inspector on one given date, respecting
 // operating hours, appointment duration, buffer time, and existing bookings.
 function getOpenSlotsForDay(roofer,inspectorId,dateStr,excludeId){
-  const sched=roofer.scheduleSettings||DEFAULT_SCHEDULE;
+  const inspector=(roofer.inspectors||[]).find(i=>i.id===inspectorId);
+  const inspSched=inspector?.schedule; // per-inspector schedule if set
+  const rooferSched=roofer.scheduleSettings||DEFAULT_SCHEDULE;
+
   const dow=DOW_NAMES[new Date(dateStr+"T12:00:00").getDay()];
-  const dayHours=sched.hours[dow];
+  const dowLower=dow.toLowerCase().slice(0,3); // "mon", "tue" etc
+
+  // Check inspector's own schedule first
+  if(inspSched){
+    // Inspector day off check
+    const dayActive=inspSched.days?.[dowLower];
+    const defaultActive=["mon","tue","wed","thu","fri"].includes(dowLower);
+    const isOn=dayActive!==undefined?dayActive:defaultActive;
+    if(!isOn) return [];
+
+    const[startH,startM]=(inspSched.startTime||"08:00").split(":").map(Number);
+    const[endH,endM]=(inspSched.endTime||"17:00").split(":").map(Number);
+    const dayStart=combineDateTime(dateStr,startH,startM);
+    const dayEnd=combineDateTime(dateStr,endH,endM);
+    const duration=rooferSched.durationMins||60;
+    const buffer=rooferSched.bufferMins||0;
+    const stepMins=30;
+
+    const slots=[];
+    let cursor=dayStart;
+    const now=new Date();
+    while(new Date(cursor)<new Date(dayEnd)){
+      const slotEnd=addMinutesISO(cursor,duration);
+      if(new Date(slotEnd)<=new Date(dayEnd)){
+        const inPast=new Date(cursor)<now;
+        const conflict=hasConflict(roofer.inspections,inspectorId,cursor,slotEnd,buffer,excludeId);
+        if(!inPast&&!conflict) slots.push({startISO:cursor,endISO:slotEnd});
+      }
+      cursor=addMinutesISO(cursor,stepMins);
+    }
+    return slots;
+  }
+
+  // Fall back to roofer-level schedule
+  const dayHours=rooferSched.hours[dow];
   if(!dayHours||!dayHours.open) return [];
 
   const[startH,startM]=dayHours.start.split(":").map(Number);
   const[endH,endM]=dayHours.end.split(":").map(Number);
   const dayStart=combineDateTime(dateStr,startH,startM);
   const dayEnd=combineDateTime(dateStr,endH,endM);
-  const duration=sched.durationMins||60;
-  const buffer=sched.bufferMins||0;
-  const stepMins=30; // slot grid granularity — offer times on the half hour
+  const duration=rooferSched.durationMins||60;
+  const buffer=rooferSched.bufferMins||0;
+  const stepMins=30;
 
   const slots=[];
   let cursor=dayStart;
@@ -1464,6 +1501,11 @@ function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNot
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{...flex(12,"center","space-between"),padding:"8px 12px",background:C.surface,borderRadius:7,flexWrap:"wrap",gap:6}}>
         <div style={flex(12)}><span style={{fontSize:12,color:C.textSub}}>{lead.address?`${lead.address}, `:""}ZIP {lead.zip}</span><span style={{fontSize:12,color:C.textSub}}>⛈ {lead.stormType}</span></div>
+        {(lead.roofLastReplaced||lead.roofMaterial||lead.roofAge)&&<div style={{...flex(8),flexWrap:"wrap",gap:6,marginTop:2}}>
+          {lead.roofLastReplaced&&<span style={{fontSize:11,color:C.textMuted,background:C.surface,padding:"2px 8px",borderRadius:5,border:`1px solid ${C.border}`}}>Replaced: {lead.roofLastReplaced}</span>}
+          {lead.roofMaterial&&<span style={{fontSize:11,color:C.textMuted,background:C.surface,padding:"2px 8px",borderRadius:5,border:`1px solid ${C.border}`}}>{lead.roofMaterial}</span>}
+          {lead.roofAge&&<span style={{fontSize:11,color:C.textMuted,background:C.surface,padding:"2px 8px",borderRadius:5,border:`1px solid ${C.border}`}}>{lead.roofAge}</span>}
+        </div>}
         <div style={flex(6)}><StatusBadge status={lead.status}/><AdultBadge status={lead.adultConfirmed}/></div>
       </div>
 
@@ -1730,7 +1772,15 @@ function EditRooferModal({roofer,onClose,onSave}){
 }
 
 function EditLeadModal({lead,roofers,onClose,onSave}){
-  const[f,setF]=useState({homeowner:lead.homeowner,phone:lead.phone,address:lead.address||"",zip:lead.zip,stormType:lead.stormType,status:lead.status,rooferId:lead.rooferId,notes:lead.notes||""});
+  const[f,setF]=useState({
+    homeowner:lead.homeowner, phone:lead.phone,
+    address:lead.address||"", zip:lead.zip,
+    stormType:lead.stormType, status:lead.status,
+    rooferId:lead.rooferId, notes:lead.notes||"",
+    roofLastReplaced:lead.roofLastReplaced||"",
+    roofMaterial:lead.roofMaterial||"",
+    roofAge:lead.roofAge||"",
+  });
   const u=k=>v=>setF(p=>({...p,[k]:v}));
   return <Modal title="Edit Lead" onClose={onClose}>
     <div style={{display:"flex",flexDirection:"column",gap:13}}>
@@ -1741,6 +1791,16 @@ function EditLeadModal({lead,roofers,onClose,onSave}){
         <Input label="ZIP" value={f.zip} onChange={u("zip")}/>
       </div>
       <Input label="Storm Type" value={f.stormType} onChange={u("stormType")}/>
+      <div style={{background:C.surface,borderRadius:9,padding:"12px 14px",border:`1px solid ${C.border}`}}>
+        <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:10}}>Roof Information</div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          <div style={grid("1fr 1fr",12)}>
+            <Input label="Last Replaced (Year)" type="number" value={f.roofLastReplaced} onChange={u("roofLastReplaced")} placeholder="2018"/>
+            <Select label="Material" value={f.roofMaterial} onChange={u("roofMaterial")} options={["","Asphalt Shingle","Metal","Tile","Wood Shake","Flat/TPO","Modified Bitumen","Other"]}/>
+          </div>
+          <Select label="Approximate Age" value={f.roofAge} onChange={u("roofAge")} options={["","Less than 5 years","5-10 years","10-15 years","15-20 years","20+ years"]}/>
+        </div>
+      </div>
       <div style={grid("1fr 1fr",12)}>
         <Select label="Status" value={f.status} onChange={u("status")} options={["pending","contacted","scheduled","won","cold"]}/>
         <Select label="Assigned Roofer" value={f.rooferId} onChange={u("rooferId")} options={roofers.map(r=>({value:r.id,label:r.name}))}/>
@@ -1805,17 +1865,134 @@ function AddLeadModal({roofers, defaultRooferId, onClose, onAdd}){
   );
 }
 
+function InspectorCard({inspector, roofer, onUpdate}){
+  const[editing,setEditing]=useState(false);
+  const[f,setF]=useState({
+    name:inspector.name, phone:inspector.phone||"",
+    zones:(inspector.zones||[]).join(", "),
+    schedule:inspector.schedule||DEFAULT_INSPECTOR_SCHEDULE,
+  });
+  const dayKeys=["sun","mon","tue","wed","thu","fri","sat"];
+
+  function save(){
+    const updated={...inspector,...f,zones:f.zones.split(",").map(z=>z.trim()).filter(Boolean)};
+    onUpdate("update_inspector",{rooferId:roofer.id,inspector:updated});
+    setEditing(false);
+  }
+
+  const sched = inspector.schedule||DEFAULT_INSPECTOR_SCHEDULE;
+  const activeDays = dayKeys.filter(d=>sched.days?.[d]!==false&&(sched.days?.[d]||["mon","tue","wed","thu","fri"].includes(d)));
+
+  return(
+    <div style={card()}>
+      <div style={{...flex(0,"center","space-between"),marginBottom:editing?12:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:36,height:36,borderRadius:"50%",background:`linear-gradient(135deg,${C.blue},${C.orange})`,
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:14,fontWeight:700,color:"#fff",flexShrink:0}}>
+            {inspector.name.charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:C.text}}>{inspector.name}</div>
+            <div style={{fontSize:11,color:C.textSub,marginTop:1}}>
+              {inspector.phone&&`${inspector.phone} · `}
+              {activeDays.map(d=>d.charAt(0).toUpperCase()+d.slice(1)).join(", ")}
+              {` · ${sched.startTime}–${sched.endTime}`}
+            </div>
+          </div>
+        </div>
+        <div style={flex(6)}>
+          <Btn small variant="ghost" onClick={()=>setEditing(e=>!e)}>{editing?"Cancel":"Edit"}</Btn>
+          <Btn small variant="danger" onClick={()=>{
+            if(window.confirm(`Remove ${inspector.name}?`))
+              onUpdate("remove_inspector",{rooferId:roofer.id,inspectorId:inspector.id});
+          }}>Remove</Btn>
+        </div>
+      </div>
+
+      {!editing&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
+        {(inspector.zones||[]).map(z=><Badge key={z} label={z} color={C.blue} small/>)}
+      </div>}
+
+      {editing&&<div style={{display:"flex",flexDirection:"column",gap:12,borderTop:`1px solid ${C.border}`,paddingTop:12}}>
+        <div style={grid("1fr 1fr",12)}>
+          <Input label="Name" value={f.name} onChange={v=>setF(p=>({...p,name:v}))}/>
+          <Input label="Phone" value={f.phone} onChange={v=>setF(p=>({...p,phone:v}))}/>
+        </div>
+        <Input label="ZIP Zones (comma-separated)" value={f.zones} onChange={v=>setF(p=>({...p,zones:v}))}/>
+        <div style={{background:C.surface,borderRadius:9,padding:"12px 14px",border:`1px solid ${C.border}`}}>
+          <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:10}}>Schedule</div>
+          <InspectorScheduleEditor schedule={f.schedule} onChange={v=>setF(p=>({...p,schedule:v}))}/>
+        </div>
+        <div style={{...flex(8,"center","flex-end")}}>
+          <Btn onClick={()=>setEditing(false)}>Cancel</Btn>
+          <Btn variant="primary" onClick={save}>Save</Btn>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+const DAYS_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DEFAULT_INSPECTOR_SCHEDULE = {
+  startTime:"08:00", endTime:"17:00",
+  days:{sun:false,mon:true,tue:true,wed:true,thu:true,fri:true,sat:false},
+};
+
+function InspectorScheduleEditor({schedule, onChange}){
+  const s = schedule || DEFAULT_INSPECTOR_SCHEDULE;
+  const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+      <div style={grid("1fr 1fr",12)}>
+        <Input label="Start Time" type="time" value={s.startTime||"08:00"} onChange={v=>onChange({...s,startTime:v})}/>
+        <Input label="End Time" type="time" value={s.endTime||"17:00"} onChange={v=>onChange({...s,endTime:v})}/>
+      </div>
+      <div>
+        <div style={{fontSize:11,fontWeight:600,color:C.textSub,marginBottom:6}}>Working Days</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {dayKeys.map((d,i)=>{
+            const active=s.days?.[d]!==false&&(s.days?.[d]||["mon","tue","wed","thu","fri"].includes(d));
+            return(
+              <button key={d} onClick={()=>onChange({...s,days:{...(s.days||{}), [d]:!active}})}
+                style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${active?C.orange:C.border}`,
+                  background:active?`${C.orange}18`:"transparent",
+                  color:active?C.orange:C.textMuted,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                {DAYS_SHORT[i]}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AddInspectorModal({onClose,onAdd}){
-  const[f,setF]=useState({name:"",phone:"",zones:""});
+  const[f,setF]=useState({name:"",phone:"",zones:"",schedule:{...DEFAULT_INSPECTOR_SCHEDULE}});
   const u=k=>v=>setF(p=>({...p,[k]:v}));
-  return <Modal title="Add Inspector" onClose={onClose}>
+  return <Modal title="Add Inspector" onClose={onClose} wide>
     <div style={{display:"flex",flexDirection:"column",gap:13}}>
-      <Input label="Name" value={f.name} onChange={u("name")} placeholder="Jake Torres"/>
-      <Input label="Phone" value={f.phone} onChange={u("phone")} placeholder="972-555-0200"/>
+      <div style={grid("1fr 1fr",12)}>
+        <Input label="Name" value={f.name} onChange={u("name")} placeholder="Jake Torres"/>
+        <Input label="Phone" value={f.phone} onChange={u("phone")} placeholder="972-555-0200"/>
+      </div>
       <Input label="ZIP Zones (comma-separated)" value={f.zones} onChange={u("zones")} placeholder="75023, 75024"/>
+      <div style={{background:C.surface,borderRadius:9,padding:"12px 14px",border:`1px solid ${C.border}`}}>
+        <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:10}}>Schedule</div>
+        <InspectorScheduleEditor schedule={f.schedule} onChange={v=>setF(p=>({...p,schedule:v}))}/>
+      </div>
       <div style={{...flex(8,"center","flex-end"),marginTop:6}}>
         <Btn onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" onClick={()=>{if(!f.name)return;onAdd({id:"i"+Date.now(),...f,zones:f.zones.split(",").map(z=>z.trim()).filter(Boolean)});onClose();}}>Add Inspector</Btn>
+        <Btn variant="primary" onClick={()=>{
+          if(!f.name) return;
+          onAdd({
+            id:"i"+Date.now(), ...f,
+            zones:f.zones.split(",").map(z=>z.trim()).filter(Boolean),
+            schedule:f.schedule||DEFAULT_INSPECTOR_SCHEDULE,
+          });
+          onClose();
+        }}>Add Inspector</Btn>
       </div>
     </div>
   </Modal>;
@@ -3826,14 +4003,17 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
     </div>}
 
     {tab==="Inspectors"&&<div>
-      <div style={{...flex(0,"center","flex-end"),marginBottom:14}}><Btn variant="primary" onClick={()=>setShowAddInspector(true)}>+ Add Inspector</Btn></div>
-      <TableWrap headers={["Name","Phone","ZIP Zones"]} empty={(roofer.inspectors||[]).length===0?"No inspectors added yet.":undefined}>
-        {(roofer.inspectors||[]).map(ins=><TR key={ins.id}>
-          <TD bold>{ins.name}</TD>
-          <TD dim>{ins.phone}</TD>
-          <TD><div style={{...flex(6),flexWrap:"wrap"}}>{ins.zones.map(z=><Badge key={z} label={z} color={C.blue} small/>)}</div></TD>
-        </TR>)}
-      </TableWrap>
+      <div style={{...flex(0,"center","flex-end"),marginBottom:14}}>
+        <Btn variant="primary" onClick={()=>setShowAddInspector(true)}>+ Add Inspector</Btn>
+      </div>
+      {(roofer.inspectors||[]).length===0
+        ?<div style={{...card({textAlign:"center",padding:40,color:C.textMuted,fontSize:13})}}>No inspectors added yet.</div>
+        :<div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {(roofer.inspectors||[]).map(ins=>(
+            <InspectorCard key={ins.id} inspector={ins} roofer={roofer} onUpdate={onUpdate}/>
+          ))}
+        </div>
+      }
     </div>}
 
     {tab==="Territories"&&<div>
@@ -6805,7 +6985,9 @@ export default function App(){
       case "delete_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:(r.inspections||[]).filter(i=>i.id!==payload.inspectionId)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:(p.inspections||[]).filter(i=>i.id!==payload.inspectionId)}:p);break;
       case "add_time_block":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,timeBlocks:[...(r.timeBlocks||[]),payload.block]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,timeBlocks:[...(p.timeBlocks||[]),payload.block]}:p);break;
       case "delete_time_block":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,timeBlocks:(r.timeBlocks||[]).filter(b=>b.id!==payload.blockId)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,timeBlocks:(p.timeBlocks||[]).filter(b=>b.id!==payload.blockId)}:p);break;
-      case "add_inspector":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspectors:[...r.inspectors,payload.inspector]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspectors:[...p.inspectors,payload.inspector]}:p);break;
+      case "add_inspector":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspectors:[...(r.inspectors||[]),payload.inspector]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspectors:[...(p.inspectors||[]),payload.inspector]}:p);break;
+      case "update_inspector":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspectors:(r.inspectors||[]).map(i=>i.id===payload.inspector.id?payload.inspector:i)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspectors:(p.inspectors||[]).map(i=>i.id===payload.inspector.id?payload.inspector:i)}:p);break;
+      case "remove_inspector":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspectors:(r.inspectors||[]).filter(i=>i.id!==payload.inspectorId)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspectors:(p.inspectors||[]).filter(i=>i.id!==payload.inspectorId)}:p);break;
       case "add_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:[...r.inspections,payload.inspection]}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:[...p.inspections,payload.inspection]}:p);break;
       case "reschedule_inspection":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,inspections:r.inspections.map(i=>i.id===payload.inspection.id?{...i,...payload.inspection}:i)}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,inspections:p.inspections.map(i=>i.id===payload.inspection.id?{...i,...payload.inspection}:i)}:p);break;
       case "update_schedule_settings":setRoofers(p=>p.map(r=>r.id===payload.rooferId?{...r,scheduleSettings:payload.settings}:r));setSelectedRoofer(p=>p&&p.id===payload.rooferId?{...p,scheduleSettings:payload.settings}:p);break;
