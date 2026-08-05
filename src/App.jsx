@@ -1479,109 +1479,245 @@ Always explain in plain English first, then include action blocks. Ask for clari
 }
 
 // ─── MODALS ───────────────────────────────────────────────────────────────────
-function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNotes}){
-  const[msg,setMsg]=useState(""),[notes,setNotes]=useState(lead?.notes||""),[editing,setEditing]=useState(false);
+function ConversationModal({lead,roofer,storms,onClose,onSendMessage,onUpdateNotes,onEdit,jobs,estimates,invoices,onUpdate}){
+  const[msg,setMsg]=useState("");
+  const[notes,setNotes]=useState(lead?.notes||"");
+  const[editing,setEditing]=useState(false);
+  const[activeTab,setActiveTab]=useState("Profile");
   const bot=useRef(null);
   useEffect(()=>bot.current?.scrollIntoView({behavior:"smooth"}),[lead?.conversations]);
 
   if(!lead||!lead.id) return null;
 
   const relatedStorms=(storms||[]).filter(s=>s.zip===lead.zip);
+  const leadJobs=(jobs||[]).filter(j=>j.leadId===lead.id||j.homeowner===lead.homeowner);
 
-  // Show property map for booked+ leads that have an address
-  const BOOKED_STAGES = ["scheduled","won","contacted"];
-  const showStreetView = BOOKED_STAGES.includes(lead.status) && lead.address && lead.zip;
-  const fullAddress = showStreetView ? `${lead.address}, ${lead.zip}` : null;
-  const GOOGLE_MAPS_KEY = "AIzaSyAtr2wsraqDjd49KLRzqtebB7F9tVg-lvk";
-  const mapsEmbedUrl = (showStreetView && fullAddress)
-    ? `https://www.google.com/maps/embed/v1/streetview?key=${GOOGLE_MAPS_KEY}&location=${encodeURIComponent(fullAddress)}&fov=80&pitch=0`
-    : null;
+  // Street View
+  const BOOKED_STAGES=["scheduled","won","contacted"];
+  const showStreetView=BOOKED_STAGES.includes(lead.status)&&lead.address&&lead.zip;
+  const fullAddress=showStreetView?`${lead.address}, ${lead.zip}`:null;
+  const GOOGLE_MAPS_KEY="AIzaSyAtr2wsraqDjd49KLRzqtebB7F9tVg-lvk";
+  const mapsEmbedUrl=(showStreetView&&fullAddress)
+    ?`https://www.google.com/maps/embed/v1/streetview?key=${GOOGLE_MAPS_KEY}&location=${encodeURIComponent(fullAddress)}&fov=80&pitch=0`
+    :null;
 
-  return <Modal title={`${lead.homeowner} — ${lead.phone}`} onClose={onClose} wide>
-    <div style={{display:"flex",flexDirection:"column",gap:12}}>
-      <div style={{...flex(12,"center","space-between"),padding:"8px 12px",background:C.surface,borderRadius:7,flexWrap:"wrap",gap:6}}>
-        <div style={flex(12)}><span style={{fontSize:12,color:C.textSub}}>{lead.address?`${lead.address}, `:""}ZIP {lead.zip}</span><span style={{fontSize:12,color:C.textSub}}>⛈ {lead.stormType}</span></div>
-        {(lead.roofLastReplaced||lead.roofMaterial||lead.roofAge)&&<div style={{...flex(8),flexWrap:"wrap",gap:6,marginTop:2}}>
-          {lead.roofLastReplaced&&<span style={{fontSize:11,color:C.textMuted,background:C.surface,padding:"2px 8px",borderRadius:5,border:`1px solid ${C.border}`}}>Replaced: {lead.roofLastReplaced}</span>}
-          {lead.roofMaterial&&<span style={{fontSize:11,color:C.textMuted,background:C.surface,padding:"2px 8px",borderRadius:5,border:`1px solid ${C.border}`}}>{lead.roofMaterial}</span>}
-          {lead.roofAge&&<span style={{fontSize:11,color:C.textMuted,background:C.surface,padding:"2px 8px",borderRadius:5,border:`1px solid ${C.border}`}}>{lead.roofAge}</span>}
-        </div>}
-        <div style={flex(6)}><StatusBadge status={lead.status}/><AdultBadge status={lead.adultConfirmed}/></div>
-      </div>
+  const statusColors={pending:C.orange,contacted:C.blue,scheduled:C.purple,won:C.green,cold:C.textMuted};
 
-      {/* Google Street View — only for booked/won/contacted leads with address */}
-      {showStreetView&&<div style={{borderRadius:10,overflow:"hidden",border:`1px solid ${C.border}`,position:"relative"}}>
-        <div style={{fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",
-          letterSpacing:"0.07em",padding:"6px 10px",background:C.surface,
-          borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:6}}>
-          <span>◆</span> Property — {fullAddress}
-          <a href={`https://www.google.com/maps/search/${encodeURIComponent(fullAddress||"")}`}
-            target="_blank" rel="noreferrer"
-            style={{marginLeft:"auto",fontSize:10,color:C.orange,textDecoration:"none"}}>
-            Open in Maps →
-          </a>
-        </div>
-        <iframe
-          title="Street View"
-          width="100%"
-          height="220"
-          style={{display:"block",border:"none"}}
-          loading="lazy"
-          allowFullScreen
-          src={mapsEmbedUrl}
-        />
-      </div>}
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:1000,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+      onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,
+        width:Math.min(720,window.innerWidth-32),maxHeight:"92vh",
+        overflow:"hidden",display:"flex",flexDirection:"column",
+        boxShadow:"0 24px 60px rgba(0,0,0,0.6)"}}>
 
-      {/* Storm context for this ZIP */}
-      {relatedStorms.length>0&&<div style={{background:`${C.orange}08`,border:`1px solid ${C.orange}22`,borderRadius:8,padding:"10px 14px"}}>
-        <div style={{fontSize:11,fontWeight:600,color:C.orange,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:8}}>
-          Storm Events in ZIP {lead.zip}
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {relatedStorms.map(s=>(
-            <div key={s.id} style={{display:"flex",alignItems:"flex-start",gap:8}}>
-              <div style={{width:6,height:6,borderRadius:"50%",marginTop:4,flexShrink:0,
-                background:s.severity==="extreme"?C.red:s.severity==="severe"?C.yellow:C.blue}}/>
-              <div style={{flex:1}}>
-                <div style={{fontSize:12,fontWeight:500,color:C.text}}>
-                  {s.type} — {s.date}
-                  {s.detail?.hailSize&&<span style={{color:C.orange,marginLeft:8}}>◆ {s.detail.hailSize} hail</span>}
-                  {s.detail?.windSpeed&&<span style={{color:C.blue,marginLeft:8}}>→ {s.detail.windSpeed}</span>}
-                  {s.detail?.efRating&&<span style={{color:C.red,marginLeft:8}}>{s.detail.efRating}</span>}
+        {/* Header */}
+        <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`,
+          background:`linear-gradient(135deg,${C.surface},${C.card})`}}>
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <div style={{width:40,height:40,borderRadius:"50%",flexShrink:0,
+                  background:`linear-gradient(135deg,${C.orange},${C.purple})`,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:16,fontWeight:700,color:"#fff"}}>
+                  {(lead.homeowner||"?").charAt(0).toUpperCase()}
                 </div>
-                {s.headline&&s.headline!==s.type&&<div style={{fontSize:10,color:C.textSub,marginTop:1}}>{s.headline}</div>}
+                <div>
+                  <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:18,fontWeight:700,color:C.text}}>{lead.homeowner}</div>
+                  <div style={{display:"flex",gap:6,marginTop:3,flexWrap:"wrap"}}>
+                    <StatusBadge status={lead.status}/>
+                    <AdultBadge status={lead.adultConfirmed}/>
+                    {lead.stormType&&<Badge label={`⛈ ${lead.stormType}`} color={C.blue} small/>}
+                  </div>
+                </div>
               </div>
-              <Badge label={s.severity} color={s.severity==="extreme"?C.red:s.severity==="severe"?C.yellow:C.blue} small/>
             </div>
+            <div style={{display:"flex",gap:8,flexShrink:0}}>
+              {onEdit&&<Btn small variant="ghost" onClick={()=>onEdit(lead)}>Edit</Btn>}
+              <button onClick={onClose} style={{background:"none",border:"none",color:C.textMuted,
+                cursor:"pointer",fontSize:22,lineHeight:1,padding:"0 4px"}}>×</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,background:C.surface}}>
+          {["Profile","Conversation","Jobs"].map(t=>(
+            <button key={t} onClick={()=>setActiveTab(t)} style={{
+              padding:"10px 20px",fontSize:13,fontWeight:activeTab===t?600:400,
+              color:activeTab===t?C.orange:C.textMuted,
+              background:"none",border:"none",cursor:"pointer",
+              borderBottom:activeTab===t?`2px solid ${C.orange}`:"2px solid transparent",
+              marginBottom:-1,
+            }}>{t}</button>
           ))}
         </div>
-      </div>}
 
-      <div style={{...card({padding:12})}}>
-        <div style={{...flex(0,"center","space-between"),marginBottom:editing?8:0}}>
-          <span style={T.label}>Notes</span>
-          <Btn small variant="ghost" onClick={()=>{if(editing)onUpdateNotes(lead.id,notes);setEditing(!editing);}}>{editing?"Save Notes":"Edit"}</Btn>
-        </div>
-        {editing?<Textarea value={notes} onChange={setNotes} placeholder="Add notes about this lead..." rows={2}/>:<div style={{fontSize:13,color:notes?C.text:C.textMuted,lineHeight:1.6}}>{notes||"No notes yet — click Edit to add."}</div>}
-      </div>
-      <div style={{height:270,overflow:"auto",display:"flex",flexDirection:"column",gap:8,padding:2}}>
-        {(lead.conversations||[]).length===0&&<div style={{textAlign:"center",color:C.textMuted,padding:40,fontSize:13}}>No messages yet.</div>}
-        {(lead.conversations||[]).map((c,i)=><div key={i} style={{display:"flex",flexDirection:"column",alignItems:c.role==="ai"?"flex-start":"flex-end"}}>
-          <div style={{padding:"8px 12px",borderRadius:8,fontSize:13,lineHeight:1.6,maxWidth:"82%",background:c.role==="ai"?C.blueDim:C.greenDim,border:`1px solid ${c.role==="ai"?C.blue+"28":C.green+"28"}`,whiteSpace:"pre-wrap"}}>{c.msg}</div>
-          <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{c.role==="ai"?"AI Agent":"Lead"} · {c.ts}</div>
-        </div>)}
-        <div ref={bot}/>
-      </div>
-      <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
-        {roofer&&!isWithinCommWindow(roofer.commSettings)&&<div style={{marginBottom:8}}><Badge label="Outside active comm hours" color={C.yellow} small/></div>}
-        <div style={flex(8)}>
-          <input value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey&&msg.trim()){onSendMessage(lead,msg);setMsg("");}}} placeholder="Type a message to send..." style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 12px",color:C.text,fontSize:13,outline:"none"}}/>
-          <Btn variant="primary" onClick={()=>{if(msg.trim()){onSendMessage(lead,msg);setMsg("");}}}>Send</Btn>
+        {/* Content */}
+        <div style={{flex:1,overflow:"auto",padding:20}}>
+
+          {/* ── PROFILE TAB ── */}
+          {activeTab==="Profile"&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+
+            {/* Street View */}
+            {showStreetView&&mapsEmbedUrl&&<div style={{borderRadius:10,overflow:"hidden",
+              border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",
+                letterSpacing:"0.07em",padding:"6px 12px",background:C.surface,
+                borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:6}}>
+                <span>◆</span> {fullAddress}
+                <a href={`https://www.google.com/maps/search/${encodeURIComponent(fullAddress||"")}`}
+                  target="_blank" rel="noreferrer"
+                  style={{marginLeft:"auto",fontSize:10,color:C.orange,textDecoration:"none"}}>
+                  Open in Maps →
+                </a>
+              </div>
+              <iframe title="Street View" width="100%" height="200"
+                style={{display:"block",border:"none"}} loading="lazy" allowFullScreen src={mapsEmbedUrl}/>
+            </div>}
+
+            {/* Contact Info */}
+            <div style={card()}>
+              <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:12}}>Contact Information</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                {[
+                  {l:"Phone",v:lead.phone,href:`tel:${lead.phone}`},
+                  {l:"ZIP Code",v:lead.zip},
+                  {l:"Address",v:lead.address||"—"},
+                  {l:"Assigned Roofer",v:roofer?.name||"—"},
+                ].map(r=>(
+                  <div key={r.l}>
+                    <div style={{fontSize:10,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:2}}>{r.l}</div>
+                    {r.href
+                      ?<a href={r.href} style={{fontSize:13,color:C.orange,textDecoration:"none",fontWeight:500}}>{r.v||"—"}</a>
+                      :<div style={{fontSize:13,color:r.v&&r.v!=="—"?C.text:C.textMuted,fontWeight:500}}>{r.v||"—"}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Roof Info */}
+            <div style={card()}>
+              <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:12}}>Roof Information</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+                {[
+                  {l:"Last Replaced",v:lead.roofLastReplaced||"Unknown"},
+                  {l:"Material",v:lead.roofMaterial||"Unknown"},
+                  {l:"Age",v:lead.roofAge||"Unknown"},
+                ].map(r=>(
+                  <div key={r.l}>
+                    <div style={{fontSize:10,color:C.textMuted,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:2}}>{r.l}</div>
+                    <div style={{fontSize:13,color:r.v!=="Unknown"?C.text:C.textMuted,fontWeight:500}}>{r.v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Storm Events */}
+            {relatedStorms.length>0&&<div style={card()}>
+              <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:10}}>Storm Events in ZIP {lead.zip}</div>
+              {relatedStorms.slice(0,3).map(s=>(
+                <div key={s.id} style={{...flex(0,"center","space-between"),padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:500,color:C.text}}>{s.type} — {s.date}</div>
+                    {s.detail?.hailSize&&<div style={{fontSize:11,color:C.textSub}}>Hail: {s.detail.hailSize}"</div>}
+                    {s.headline&&s.headline!==s.type&&<div style={{fontSize:10,color:C.textSub}}>{s.headline}</div>}
+                  </div>
+                  <Badge label={s.severity} color={s.severity==="extreme"?C.red:s.severity==="severe"?C.yellow:C.blue} small/>
+                </div>
+              ))}
+            </div>}
+
+            {/* Notes */}
+            <div style={card()}>
+              <div style={{...flex(0,"center","space-between"),marginBottom:editing?8:0}}>
+                <div style={{fontSize:11,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em"}}>Notes</div>
+                <Btn small variant="ghost" onClick={()=>{
+                  if(editing) onUpdateNotes(lead.id,notes);
+                  setEditing(!editing);
+                }}>{editing?"Save":"Edit"}</Btn>
+              </div>
+              {editing
+                ?<Textarea value={notes} onChange={setNotes} placeholder="Add notes about this lead..." rows={3}/>
+                :<div style={{fontSize:13,color:notes?C.text:C.textMuted,lineHeight:1.7,whiteSpace:"pre-wrap"}}>{notes||"No notes yet — click Edit to add."}</div>}
+            </div>
+          </div>}
+
+          {/* ── CONVERSATION TAB ── */}
+          {activeTab==="Conversation"&&<div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div style={{display:"flex",flexDirection:"column",gap:8,minHeight:300}}>
+              {(lead.conversations||[]).length===0
+                ?<div style={{textAlign:"center",color:C.textMuted,padding:40,fontSize:13}}>No messages yet.</div>
+                :(lead.conversations||[]).map((c,i)=>(
+                  <div key={i} style={{display:"flex",flexDirection:"column",alignItems:c.role==="ai"?"flex-start":"flex-end"}}>
+                    <div style={{padding:"9px 13px",borderRadius:10,fontSize:13,lineHeight:1.6,
+                      maxWidth:"80%",whiteSpace:"pre-wrap",
+                      background:c.role==="ai"?C.blueDim:C.greenDim,
+                      border:`1px solid ${c.role==="ai"?C.blue+"28":C.green+"28"}`}}>
+                      {c.msg}
+                    </div>
+                    <div style={{fontSize:10,color:C.textMuted,marginTop:3}}>
+                      {c.role==="ai"?"AI Agent":"Lead"} · {c.ts}
+                    </div>
+                  </div>
+                ))
+              }
+              <div ref={bot}/>
+            </div>
+            <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+              {roofer&&!isWithinCommWindow(roofer.commSettings)&&<div style={{marginBottom:8}}>
+                <Badge label="Outside active comm hours" color={C.yellow} small/>
+              </div>}
+              <div style={flex(8)}>
+                <input value={msg} onChange={e=>setMsg(e.target.value)}
+                  onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey&&msg.trim()){onSendMessage(lead,msg);setMsg("");}}}
+                  placeholder="Type a message..." style={{flex:1,background:C.surface,
+                    border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 12px",
+                    color:C.text,fontSize:13,outline:"none"}}/>
+                <Btn variant="primary" onClick={()=>{if(msg.trim()){onSendMessage(lead,msg);setMsg("");}}}>Send</Btn>
+              </div>
+            </div>
+          </div>}
+
+          {/* ── JOBS TAB ── */}
+          {activeTab==="Jobs"&&<div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {leadJobs.length===0
+              ?<div style={{textAlign:"center",color:C.textMuted,padding:40,fontSize:13}}>
+                  No jobs linked to this lead yet.
+                  <div style={{marginTop:12}}>
+                    <Btn small variant="primary" onClick={()=>{
+                      if(onUpdate) onUpdate("add_job",{job:{
+                        id:"job_"+Date.now(),leadId:lead.id,
+                        rooferId:lead.rooferId,accountId:"admin",
+                        homeowner:lead.homeowner,phone:lead.phone||"",
+                        address:lead.address||"",zip:lead.zip||"",
+                        stage:"Lead",stormType:lead.stormType||"",
+                        notes:lead.notes||"",claimNumber:"",adjusterName:"",
+                        adjusterPhone:"",insuranceCompany:"",claimStatus:"none",
+                        mortgageCompany:"",photos:[],tasks:[],actualCost:0,
+                      }});
+                      setActiveTab("Jobs");
+                    }}>Create Job from Lead</Btn>
+                  </div>
+                </div>
+              :<JobPipeline
+                  jobs={leadJobs}
+                  estimates={estimates||[]}
+                  invoices={invoices||[]}
+                  roofers={roofer?[roofer]:[]}
+                  leads={[lead]}
+                  onUpdate={onUpdate||(() =>{})}
+                />
+            }
+          </div>}
         </div>
       </div>
     </div>
-  </Modal>;
+  );
 }
+
 
 function LogRevenueModal({lead,onClose,onSave}){
   const[amount,setAmount]=useState(""),[note,setNote]=useState("");
@@ -3902,7 +4038,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
         }
       }}/>}
     {editingLead&&<EditLeadModal lead={editingLead} roofers={[roofer]} onClose={()=>setEditingLead(null)} onSave={l=>onUpdate("edit_lead",{lead:l})}/>}
-    {viewingConvo&&viewingConvo.id&&<ConversationModal lead={viewingConvo} roofer={roofer} storms={[]} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
+    {viewingConvo&&viewingConvo.id&&<ConversationModal lead={viewingConvo} roofer={roofer} storms={[]} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})} onEdit={setEditingLead} jobs={jobs} estimates={estimates} invoices={invoices} onUpdate={onUpdate}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
     <Tabs tabs={["Overview","Jobs","Leads","Calendar","Schedule","Revenue","Inspectors","Territories","Comm Settings","AI Agent"]} active={tab} onChange={changeTab}/>
@@ -4624,7 +4760,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
     {showAddRoofer&&<AddRooferModal onClose={()=>setShowAddRoofer(false)} onAdd={r=>{onUpdate("add_roofer",{roofer:r});addActivity({type:"roofer",message:`New roofer: ${r.name}`,badge:r.plan,badgeColor:PLAN_COLORS[r.plan]});}}/>}
     {editingRoofer&&<EditRooferModal roofer={editingRoofer} onClose={()=>setEditingRoofer(null)} onSave={r=>onUpdate("edit_roofer",{roofer:r})}/>}
     {editingLead&&<EditLeadModal lead={editingLead} roofers={roofers} onClose={()=>setEditingLead(null)} onSave={l=>onUpdate("edit_lead",{lead:l})}/>}
-    {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofers.find(r=>r.id===viewingConvo.rooferId)} storms={storms} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})}/>}
+    {viewingConvo&&<ConversationModal lead={viewingConvo} roofer={roofers.find(r=>r.id===viewingConvo.rooferId)} storms={storms} onClose={()=>setViewingConvo(null)} onSendMessage={sendManualMessage} onUpdateNotes={(id,notes)=>onUpdate("update_lead_notes",{leadId:id,notes})} onEdit={setEditingLead} jobs={[]} estimates={[]} invoices={[]} onUpdate={onUpdate}/>}
     {loggingRevenue&&<LogRevenueModal lead={loggingRevenue} onClose={()=>setLoggingRevenue(null)} onSave={logRevenue}/>}
 
     <Tabs tabs={["Overview","Storms","Roofers","All Leads","Conversations","Activity","AI Agent"]} active={tab} onChange={changeTab}/>
