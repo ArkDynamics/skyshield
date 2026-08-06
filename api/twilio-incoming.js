@@ -134,7 +134,7 @@ function buildSlots(roofer, existingInspections = []) {
   d.setDate(d.getDate() + 1);
   let attempts = 0;
 
-  while (attempts < 21) {
+  while (attempts < 45) { // 45 calendar days covers ~30 business days
     attempts++;
     const dow = d.getDay();
     const dayNames = ["sun","mon","tue","wed","thu","fri","sat"];
@@ -183,22 +183,16 @@ function buildSlots(roofer, existingInspections = []) {
 
 // ── AI reply ──────────────────────────────────────────────────────────────────
 async function generateAIReply(lead, roofer, incomingMsg, commSettings, slots, startHour=8, endHour=17) {
-  if (!ANTHROPIC_KEY) {
-    console.warn("ANTHROPIC_API_KEY not set");
-    return null;
-  }
+  if (!ANTHROPIC_KEY) { console.warn("ANTHROPIC_API_KEY not set"); return null; }
 
-  // Immediate opt-out handling — no AI needed
   const lower = incomingMsg.trim().toLowerCase();
-  if (["stop","unsubscribe","quit","cancel","end"].includes(lower)) {
-    return { reply: "You've been unsubscribed and will receive no further messages. Reply HELP for help.", bookedSlotIndex: null };
-  }
-  if (lower === "help") {
-    return { reply: "For help email skyshieldpro@arkdynamics.io. Reply STOP to unsubscribe.", bookedSlotIndex: null };
-  }
+  if (["stop","unsubscribe","quit","cancel","end"].includes(lower))
+    return { reply: "You've been unsubscribed. Reply HELP for help.", bookedSlot: null };
+  if (lower === "help")
+    return { reply: "For help email skyshieldpro@arkdynamics.io. Reply STOP to opt out.", bookedSlot: null };
 
   const conversations = Array.isArray(lead.conversations) ? lead.conversations
-    : (typeof lead.conversations === "string" ? JSON.parse(lead.conversations) : []);
+    : (typeof lead.conversations === "string" ? JSON.parse(lead.conversations || "[]") : []);
 
   const history = conversations
     .filter(c => c.role && c.msg)
@@ -206,113 +200,89 @@ async function generateAIReply(lead, roofer, incomingMsg, commSettings, slots, s
 
   const requireAdult = commSettings?.requireAdultPresent !== false;
   const adultStatus  = lead.adult_confirmed || "unconfirmed";
-
-  // Convert hour to 12h label for display
   const h12 = h => `${h===0?12:h>12?h-12:h}:00${h>=12?"pm":"am"}`;
-  const startLabel = h12(startHour);
-  const endLabel   = h12(endHour);
 
-  // Build a condensed slot list showing unique days and available hours
-  // Group slots by date to keep the prompt concise
-  const slotsByDate = {};
-  slots.forEach((s, i) => {
-    if (!slotsByDate[s.date]) slotsByDate[s.date] = { label: s.label.split(" at ")[0], hours: [], indices: [] };
-    slotsByDate[s.date].hours.push(h12(s.hour));
-    slotsByDate[s.date].indices.push(i);
-  });
-  const slotSummary = Object.entries(slotsByDate).slice(0, 10)
-    .map(([date, info]) => `${info.label}: ${info.hours.join(", ")}`)
-    .join("\n");
+  // Give each slot a permanent number with its exact ISO embedded
+  const slotList = slots.map((s, i) =>
+    `Option ${i+1}: ${s.label} [ISO:${s.startISO}]`
+  ).join("\n");
 
   const isScheduled = lead.status === "scheduled";
-  const existingBooking = isScheduled ? (lead.notes || "").match(/AI booked: ([^|]+)/)?.[1]?.trim() : null;
+  const existingBooking = isScheduled ? (lead.notes||"").match(/AI booked: ([^|]+)/)?.[1]?.trim() : null;
 
-  const system = `You are an SMS scheduling assistant for ${roofer?.name || "a roofing company"} texting homeowner ${lead.homeowner || "the homeowner"} about their storm-damaged roof.
+  const system = `You are an SMS scheduling assistant for ${roofer?.name || "a roofing company"} texting homeowner ${lead.homeowner || "the homeowner"} about a storm-damaged roof.
 
-GOAL: book or reschedule a free roof inspection directly in this conversation.
+GOAL: book a free roof inspection in this SMS conversation.
 
-${isScheduled && existingBooking ? `CURRENT APPOINTMENT: ${existingBooking}. The homeowner may be asking to reschedule or cancel this.` : ""}
-${requireAdult ? `ADULT PRESENCE: Confirm someone 18+ will be home before booking. Current status: ${adultStatus}.` : ""}
+${isScheduled && existingBooking ? `CURRENT APPOINTMENT: ${existingBooking}. They may want to reschedule or cancel.` : ""}
 
-WORKING HOURS: ${startLabel} to ${endLabel} weekdays. Any time within these hours on an available day can be offered.
+WORKING HOURS: ${h12(startHour)} to ${h12(endHour)} Monday–Friday.
 
-AVAILABLE DAYS AND TIMES (every hour shown is open and unbooked):
-${slotSummary || "No availability right now — ask for their preferred time and set wantsCustomTime:true"}
+AVAILABLE SLOTS (use these exact numbers and ISOs when booking):
+${slotList || "No slots available — ask for preferred time and set wantsCustomTime:true"}
 
-HOW TO RESPOND:
-- Interest / "yes" → offer 3-4 options spread across different days
-- "reschedule", "change my appointment", "can we move it" → acknowledge current booking, offer new slots, set isReschedule:true
-- "cancel", "cancel my appointment", "don't come", "never mind", "I changed my mind" → acknowledge cancellation warmly, set isCancelled:true, do NOT offer new times unless they ask
-- "2pm", "3pm", any specific time → check if that hour is within working hours and available. Offer it across available days
-- "tomorrow at 2pm" → check if tomorrow is available and 2pm is within hours. If yes, offer it
-- "afternoon" → offer slots 12pm-end of day
-- "morning" → offer slots start-12pm
-- "Friday" / day name → check available days. If not available, offer nearest day
-- "next week" → filter to next calendar week
-- Bare number "1","2","3" → selecting from last listed options — set bookedSlotIndex to correct 0-based index in full slots array
-- Pricing → FREE inspections, work with all insurance companies
-- Can't answer → set needsHumanReview:true
+EXACT CONVERSATION FLOW:
+Step 1 - Interest shown ("yes", "sure", etc.) → offer 3-4 spread-out options from list above (show date and time, NOT the [ISO:...] part)
+Step 2 - They name a day ("the 19th", "Friday") → show all times available that day, numbered
+Step 3 - They pick a time ("2pm", "option 3", a number) → BEFORE booking, ask about adult presence: "Perfect! Just to confirm — will someone 18 or older be home during the inspection?"
+Step 4 - They say yes/confirm adult → set adultConfirmed:"confirmed" AND set bookedSlotISO to the EXACT [ISO:...] value from the slot they chose. Confirm booking in reply.
+Step 5 - They say no adult → explain adult must be present, ask when someone will be home
 
-When offering times, list them clearly numbered.
-WHEN BOOKING/RESCHEDULING: set bookedSlotISO to the exact startISO of the chosen slot from the available list above. Also confirm with full date, time, and inspector name in reply.
-WHEN CANCELLING: be warm, say you're sorry to hear it, let them know they can reach out anytime.
-Keep messages under 300 characters. Be warm and conversational.
+OTHER CASES:
+- Simple short replies ("ok", "sounds good", "great") → continue conversation naturally, don't repeat yourself
+- "reschedule" / "change" → set isReschedule:true, offer new slots
+- "cancel" / "never mind" → set isCancelled:true, be warm
+- Pricing questions → FREE inspections, work with all insurance
+- Anything you can't confidently answer → set needsHumanReview:true
 
-Reply ONLY with this exact JSON (no markdown):
-{"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotIndex":null,"bookedSlotISO":null,"isReschedule":false,"isCancelled":false,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
+CRITICAL RULE: Only set bookedSlotISO when adultConfirmed is "confirmed". Copy the ISO EXACTLY from [ISO:...] — do not modify or guess.
+
+Keep replies under 300 chars. Be warm and natural.
+
+Respond ONLY with valid JSON (no markdown, no text outside the braces):
+{"reply":"message text","adultConfirmed":"unconfirmed","bookedSlotISO":null,"isReschedule":false,"isCancelled":false,"wantsCustomTime":false,"preferredTime":null,"needsHumanReview":false}`;
 
   const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 600,
-      system,
-      messages: [...history, { role: "user", content: incomingMsg }],
-    }),
+    headers: { "Content-Type":"application/json", "x-api-key":ANTHROPIC_KEY, "anthropic-version":"2023-06-01" },
+    body: JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:600, system, messages:[...history,{role:"user",content:incomingMsg}] }),
   });
 
-  if (!apiRes.ok) {
-    console.error("Anthropic API error:", apiRes.status, await apiRes.text());
-    return null;
-  }
+  if (!apiRes.ok) { console.error("Anthropic error:", apiRes.status); return null; }
 
-  const apiData = await apiRes.json();
-  const raw = apiData.content?.[0]?.text || "";
-  console.log("Claude raw response:", raw.slice(0, 200));
+  const raw = (await apiRes.json()).content?.[0]?.text || "";
+  console.log("Claude raw:", raw.slice(0,400));
 
   try {
-    // Strip markdown code fences if present
-    const cleaned = raw.replace(/```json\n?|```\n?/g, "").trim();
-    // Find the JSON object even if there's extra text around it
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON object found");
-    const parsed = JSON.parse(jsonMatch[0]);
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("No JSON");
+    const p = JSON.parse(match[0]);
+
+    // Find exact slot by ISO
+    let bookedSlot = null;
+    if (p.bookedSlotISO) {
+      bookedSlot = slots.find(s => s.startISO === p.bookedSlotISO)
+        || slots.find(s => s.startISO.slice(0,16) === p.bookedSlotISO.slice(0,16));
+      if (!bookedSlot) console.warn("bookedSlotISO not matched:", p.bookedSlotISO);
+    }
+
     return {
-      reply:           parsed.reply || null,
-      adultConfirmed:  ["confirmed","denied","unconfirmed"].includes(parsed.adultConfirmed) ? parsed.adultConfirmed : adultStatus,
-      bookedSlotIndex: (typeof parsed.bookedSlotIndex === "number") ? parsed.bookedSlotIndex : null,
-      bookedSlotISO:   parsed.bookedSlotISO || null,
-      isReschedule:    !!parsed.isReschedule,
-      isCancelled:     !!parsed.isCancelled,
-      wantsCustomTime: !!parsed.wantsCustomTime,
-      preferredTime:   parsed.preferredTime || null,
-      needsHumanReview: !!parsed.needsHumanReview,
+      reply:           p.reply || null,
+      adultConfirmed:  ["confirmed","denied","unconfirmed"].includes(p.adultConfirmed) ? p.adultConfirmed : adultStatus,
+      bookedSlot,
+      bookedSlotISO:   bookedSlot?.startISO || null,
+      isReschedule:    !!p.isReschedule,
+      isCancelled:     !!p.isCancelled,
+      wantsCustomTime: !!p.wantsCustomTime,
+      preferredTime:   p.preferredTime || null,
+      needsHumanReview: !!p.needsHumanReview,
     };
-  } catch (e) {
-    console.error("JSON parse failed:", e.message, "raw:", raw.slice(0, 300));
-    // If raw looks like it contains a reply field, extract it
-    const replyMatch = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    const extractedReply = replyMatch ? replyMatch[1].replace(/\\n/g,"\n").replace(/\\"/g,'"') : null;
-    // Never send raw JSON to the homeowner
-    return { reply: extractedReply, adultConfirmed: adultStatus, bookedSlotIndex: null, needsHumanReview: false };
+  } catch(e) {
+    console.error("Parse fail:", e.message, raw.slice(0,200));
+    const m = raw.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    return { reply: m ? m[1].replace(/\\n/g,"\n").replace(/\\"/g,'"') : null, adultConfirmed: adultStatus, bookedSlot: null };
   }
 }
-
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
@@ -402,70 +372,78 @@ export default async function handler(req, res) {
       console.warn("Missing Twilio keys — cannot send reply");
     }
 
-    // 7. Handle booking
+    // 7. Handle booking / reschedule
     let patchStatus = newStatus;
     let patchNotes  = lead.notes || "";
     let bookedSlot  = null;
 
-    if ((aiResult?.bookedSlotIndex !== null && aiResult?.bookedSlotIndex !== undefined && slots.length > 0)
-       || (aiResult?.bookedSlotISO && slots.length > 0)) {
-      // Prefer ISO-based matching over index — much more accurate
-      if (aiResult.bookedSlotISO) {
-        bookedSlot = slots.find(s => s.startISO === aiResult.bookedSlotISO)
-          || slots.find(s => s.startISO.startsWith(aiResult.bookedSlotISO.slice(0,16)))
-          || (aiResult.bookedSlotIndex !== null ? slots[aiResult.bookedSlotIndex] : null)
-          || slots[0];
+    // Auto-detect reschedule: if lead is already scheduled and AI is booking a new slot
+    const autoReschedule = aiResult?.isReschedule
+      || (lead.status === "scheduled" && (aiResult?.bookedSlot || aiResult?.bookedSlotISO));
+
+    if ((aiResult?.bookedSlot || aiResult?.bookedSlotISO) && slots.length > 0) {
+      bookedSlot = aiResult.bookedSlot
+        || slots.find(s => s.startISO === aiResult.bookedSlotISO)
+        || slots.find(s => s.startISO?.slice(0,16) === aiResult.bookedSlotISO?.slice(0,16));
+
+      if (!bookedSlot) {
+        console.warn("Could not match slot, skipping booking");
       } else {
-        bookedSlot = slots[aiResult.bookedSlotIndex] ?? slots[0];
-      }
-      patchStatus = "scheduled";
-      const action = aiResult.isReschedule ? "AI rescheduled" : "AI booked";
-      patchNotes  = (patchNotes + ` | ${action}: ${bookedSlot.label}`).trim();
-      console.log(`✓ ${action} slot ${aiResult.bookedSlotIndex}: ${bookedSlot.label}`);
+        patchStatus = "scheduled";
+        const action = autoReschedule ? "AI rescheduled" : "AI booked";
+        // Remove old booking note, add new one
+        patchNotes = patchNotes.replace(/\s*\|\s*AI (booked|rescheduled):[^|]*/g, "").trim();
+        patchNotes = (patchNotes + ` | ${action}: ${bookedSlot.label}`).trim();
+        console.log(`✓ ${action}: ${bookedSlot.label} for ${lead.homeowner}`);
 
-      if (bookedSlot && roofer) {
-        const newInspection = {
-          id: "ins_" + Date.now(),
-          client: lead.homeowner || "Unknown",
-          address: lead.address ? `${lead.address}, ${lead.zip || ""}` : (lead.zip || ""),
-          phone: lead.phone || fromNumber,
-          startISO: bookedSlot.startISO,
-          endISO: bookedSlot.endISO,
-          inspectorId: bookedSlot.inspectorId || null,
-          inspector: bookedSlot.inspectorName || "Inspector",
-          status: "scheduled",
-          source: "ai_sms",
-          leadId: lead.id,
-          createdAt: new Date().toISOString(),
-        };
+        if (roofer) {
+          const newInspection = {
+            id: "ins_" + Date.now(),
+            client: lead.homeowner || "Unknown",
+            address: lead.address ? `${lead.address}, ${lead.zip || ""}` : (lead.zip || ""),
+            phone: lead.phone || fromNumber,
+            startISO: bookedSlot.startISO,
+            endISO: bookedSlot.endISO,
+            inspectorId: bookedSlot.inspectorId || null,
+            inspector: bookedSlot.inspectorName || "Inspector",
+            status: "scheduled",
+            source: "ai_sms",
+            leadId: lead.id,
+            reminderSent: false,
+            createdAt: new Date().toISOString(),
+          };
 
-        let updatedInspections;
-        if (aiResult.isReschedule) {
-          // Find existing inspection for this lead and update it
-          const existingIdx = existingInspections.findIndex(i => i.leadId === lead.id || i.client === lead.homeowner);
-          if (existingIdx >= 0) {
-            updatedInspections = existingInspections.map((ins, idx) =>
-              idx === existingIdx
-                ? { ...ins, startISO: bookedSlot.startISO, endISO: bookedSlot.endISO, status: "rescheduled" }
-                : ins
+          let updatedInspections;
+          if (autoReschedule) {
+            // Find by leadId OR homeowner name — update in place
+            const existingIdx = existingInspections.findIndex(
+              i => i.leadId === lead.id || i.client === lead.homeowner
             );
-            console.log(`✓ Rescheduled existing inspection ${existingInspections[existingIdx].id}`);
+            if (existingIdx >= 0) {
+              updatedInspections = existingInspections.map((ins, idx) =>
+                idx === existingIdx
+                  ? { ...ins, startISO: bookedSlot.startISO, endISO: bookedSlot.endISO,
+                      status: "rescheduled", reminderSent: false }
+                  : ins
+              );
+              console.log(`✓ Rescheduled inspection for ${lead.homeowner} to ${bookedSlot.label}`);
+            } else {
+              updatedInspections = [...existingInspections, newInspection];
+              console.log(`✓ No existing found, created new inspection`);
+            }
           } else {
-            // No existing found — create new
             updatedInspections = [...existingInspections, newInspection];
           }
-        } else {
-          updatedInspections = [...existingInspections, newInspection];
-        }
 
-        await sbPatch("roofers", `id=eq.${roofer.id}`, { inspections: updatedInspections });
-        console.log(`✓ Inspection record saved to roofer`);
+          await sbPatch("roofers", `id=eq.${roofer.id}`, { inspections: updatedInspections });
+          console.log(`✓ Roofer calendar updated`);
 
-        // Notify roofer by SMS
-        if (twilioKeys?.sid && twilioKeys?.token && roofer.phone) {
-          const action2 = aiResult.isReschedule ? "rescheduled" : "booked";
-          const notifyMsg = `SkyShield: ${lead.homeowner} ${action2}! ${bookedSlot.label.split(" (")[0]}. Check your calendar.`;
-          await sendSMS(twilioKeys.sid, twilioKeys.token, toNumber, roofer.phone, notifyMsg);
+          // Notify roofer
+          if (twilioKeys?.sid && twilioKeys?.token && roofer.phone) {
+            const act = autoReschedule ? "rescheduled" : "booked";
+            await sendSMS(twilioKeys.sid, twilioKeys.token, toNumber, roofer.phone,
+              `SkyShield: ${lead.homeowner} ${act}! ${bookedSlot.label.split(" (")[0]}. Check your calendar.`);
+          }
         }
       }
     }
