@@ -1742,9 +1742,35 @@ function LogRevenueModal({lead,onClose,onSave}){
 
 function CommSettingsPanel({roofer,onSave}){
   const[cfg,setCfg]=useState(roofer.commSettings||DEFAULT_COMM);
+  const[savedTemplates,setSavedTemplates]=useState(roofer.commSettings?.savedTemplates||[]);
+  const[newTplName,setNewTplName]=useState("");
+  const[showSavedTpls,setShowSavedTpls]=useState(false);
   const f=k=>v=>setCfg(p=>({...p,[k]:v}));
   const ft=k=>v=>setCfg(p=>({...p,templates:{...p.templates,[k]:v}}));
   function toggleDay(day){setCfg(p=>({...p,activeDays:p.activeDays.includes(day)?p.activeDays.filter(d=>d!==day):[...p.activeDays,day]}));}
+
+  function saveCurrentAsTemplate(){
+    if(!newTplName.trim()) return;
+    const tpl={id:"tpl_"+Date.now(),name:newTplName.trim(),templates:{...cfg.templates},createdAt:new Date().toLocaleDateString()};
+    const updated=[...savedTemplates,tpl];
+    setSavedTemplates(updated);
+    setNewTplName("");
+    onSave({...cfg,savedTemplates:updated});
+    alert(`Template "${tpl.name}" saved!`);
+  }
+
+  function loadTemplate(tpl){
+    if(window.confirm(`Load template "${tpl.name}"? This will replace your current message templates.`)){
+      setCfg(p=>({...p,templates:{...tpl.templates}}));
+    }
+  }
+
+  function deleteTemplate(id){
+    const updated=savedTemplates.filter(t=>t.id!==id);
+    setSavedTemplates(updated);
+    onSave({...cfg,savedTemplates:updated});
+  }
+
   return <div style={{display:"flex",flexDirection:"column",gap:16}}>
     <div style={card()}>
       <div style={{...T.head(14,600),marginBottom:14}}>⏰ Active Hours & Follow-Up</div>
@@ -1766,15 +1792,55 @@ function CommSettingsPanel({roofer,onSave}){
         Status: <span style={{color:isWithinCommWindow(cfg)?C.green:C.red,fontWeight:600}}>{isWithinCommWindow(cfg)?"✓ Currently within active hours":"✗ Currently outside active hours"}</span>
       </div>
     </div>
+
+    {/* Message Templates */}
     <div style={card()}>
-      <div style={{...T.head(14,600),marginBottom:6}}>Message Templates</div>
+      <div style={{...flex(0,"center","space-between"),marginBottom:6}}>
+        <div style={T.head(14,600)}>Message Templates</div>
+        <Btn small variant="ghost" onClick={()=>setShowSavedTpls(s=>!s)}>
+          {showSavedTpls?"Hide":"📋 Saved Templates"} ({savedTemplates.length})
+        </Btn>
+      </div>
       <div style={{fontSize:12,color:C.textMuted,marginBottom:14}}>Variables: {"{{name}}"} {"{{zip}}"} {"{{storm}}"} {"{{company}}"} {"{{date}}"} {"{{time}}"} {"{{inspector}}"}</div>
+
+      {/* Saved templates library */}
+      {showSavedTpls&&<div style={{marginBottom:16,background:C.surface,borderRadius:10,padding:12,border:`1px solid ${C.border}`}}>
+        <div style={{fontSize:12,fontWeight:600,color:C.textSub,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.06em"}}>Saved Templates</div>
+        {savedTemplates.length===0
+          ?<div style={{fontSize:12,color:C.textMuted,fontStyle:"italic"}}>No saved templates yet. Save your current templates below.</div>
+          :<div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {savedTemplates.map(tpl=>(
+              <div key={tpl.id} style={{display:"flex",alignItems:"center",gap:10,
+                padding:"8px 12px",background:C.card,borderRadius:8,border:`1px solid ${C.border}`}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>{tpl.name}</div>
+                  <div style={{fontSize:11,color:C.textMuted}}>Saved {tpl.createdAt}</div>
+                </div>
+                <Btn small variant="info" onClick={()=>loadTemplate(tpl)}>Load</Btn>
+                <Btn small variant="danger" onClick={()=>{if(window.confirm(`Delete "${tpl.name}"?`))deleteTemplate(tpl.id);}}>Delete</Btn>
+              </div>
+            ))}
+          </div>
+        }
+        {/* Save current as new template */}
+        <div style={{display:"flex",gap:8,marginTop:10}}>
+          <input value={newTplName} onChange={e=>setNewTplName(e.target.value)}
+            placeholder="Template name (e.g. Hail Campaign, Friendly Tone)..."
+            onKeyDown={e=>e.key==="Enter"&&saveCurrentAsTemplate()}
+            style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
+              padding:"7px 10px",color:C.text,fontSize:12,outline:"none"}}/>
+          <Btn small variant="primary" onClick={saveCurrentAsTemplate}>Save Current</Btn>
+        </div>
+      </div>}
+
       <div style={{display:"flex",flexDirection:"column",gap:14}}>
         <Textarea label="Initial Outreach" value={cfg.templates.initial} onChange={ft("initial")} rows={3}/>
         <Textarea label="Follow-Up" value={cfg.templates.followup} onChange={ft("followup")} rows={3}/>
         <Textarea label="Booking Confirmation" value={cfg.templates.booking} onChange={ft("booking")} rows={3}/>
       </div>
     </div>
+
+    {/* AI Auto-Reply */}
     <div style={card()}>
       <div style={{...T.head(14,600),marginBottom:6}}>AI Auto-Reply & Safety</div>
       <div style={{fontSize:12,color:C.textMuted,marginBottom:14,lineHeight:1.6}}>When enabled, incoming lead text replies are answered automatically by AI instead of waiting for you to respond manually.</div>
@@ -1792,7 +1858,7 @@ function CommSettingsPanel({roofer,onSave}){
       <div style={{...flex(10,"center","space-between"),padding:"10px 12px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:cfg.requireAdultPresent!==false?10:0}}>
         <div>
           <div style={{fontSize:13,fontWeight:600,color:C.text}}>Require Adult-Presence Confirmation</div>
-          <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>AI will not offer or confirm a time until the lead confirms someone 18+ will be home</div>
+          <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>AI will not confirm a time until the lead confirms someone 18+ will be home</div>
         </div>
         <button onClick={()=>setCfg(p=>({...p,requireAdultPresent:p.requireAdultPresent===false?true:false}))} style={{width:40,height:22,borderRadius:11,border:"none",cursor:"pointer",background:cfg.requireAdultPresent!==false?C.green:C.border,position:"relative",flexShrink:0}}>
           <div style={{width:18,height:18,borderRadius:"50%",background:"#fff",position:"absolute",top:2,left:cfg.requireAdultPresent!==false?20:2,transition:"left 0.15s"}}/>
@@ -1802,11 +1868,11 @@ function CommSettingsPanel({roofer,onSave}){
       {cfg.requireAdultPresent!==false&&<Textarea label="Adult-Presence Check Message" value={cfg.templates.adultCheck||""} onChange={ft("adultCheck")} placeholder="Will someone 18 or older be home during the inspection?" rows={2}/>}
 
       <div style={{marginTop:12,padding:"10px 12px",background:C.yellowDim,borderRadius:6,fontSize:12,color:C.textSub,border:`1px solid ${C.yellow}22`,lineHeight:1.6}}>
-        ⚠ Even with this on, the AI Agent in Command Center and the manual "Book" button will still warn you (not block you) if a lead hasn't confirmed adult presence yet — useful if you've already verified this by phone.
+        ⚠ Even with this on, the AI Agent in Command Center and the manual "Book" button will still warn you (not block you) if a lead hasn't confirmed adult presence yet.
       </div>
     </div>
     <div style={flex(8,"center","flex-end")}>
-      <Btn variant="primary" onClick={()=>onSave(cfg)}>Save Communication Settings</Btn>
+      <Btn variant="primary" onClick={()=>onSave({...cfg,savedTemplates})}>Save Communication Settings</Btn>
     </div>
   </div>;
 }
@@ -4091,6 +4157,37 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
     </div>}
 
     {tab==="Leads"&&<div>
+      {/* Human response alert — shows when AI flagged leads need manual reply */}
+      {(()=>{
+        const urgent=myLeads.filter(l=>l.notes&&l.notes.includes("⚠ Flagged for human review")&&l.status!=="won"&&l.status!=="cold");
+        if(!urgent.length) return null;
+        return(
+          <div style={{background:`linear-gradient(135deg,${C.red}18,${C.red}06)`,
+            border:`1px solid ${C.red}55`,borderRadius:12,padding:"14px 18px",
+            marginBottom:16,display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:C.red,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:18,flexShrink:0,animation:"pulse 1.5s ease-in-out infinite"}}>⚠</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:14,fontWeight:700,color:C.red,marginBottom:3}}>
+                {urgent.length} lead{urgent.length>1?"s":""}  need{urgent.length===1?"s":""} your personal response
+              </div>
+              <div style={{fontSize:12,color:C.textSub,lineHeight:1.5}}>
+                The AI couldn't answer their question. Open their conversation and reply manually.
+                <span style={{marginLeft:8,color:C.textMuted}}>
+                  {urgent.map(l=>l.homeowner).join(", ")}
+                </span>
+              </div>
+            </div>
+            <div style={flex(6)}>
+              <Btn small variant="danger" onClick={()=>setViewingConvo(urgent[0])}>Reply Now →</Btn>
+              {urgent.length>1&&<Btn small variant="ghost" onClick={()=>{
+                setFilter("flagged");
+              }}>View All ({urgent.length})</Btn>}
+            </div>
+          </div>
+        );
+      })()}
       <div style={{...flex(0,"center","space-between"),marginBottom:14,flexWrap:"wrap",gap:8}}>
         <div style={{...flex(6),flexWrap:"wrap"}}>
           {["all","pending","contacted","scheduled","won","cold"].map(f=><Btn key={f} small variant={leadFilter===f?"primary":"default"} onClick={()=>setLeadFilter(f)}>{f.charAt(0).toUpperCase()+f.slice(1)}</Btn>)}

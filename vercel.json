@@ -4,6 +4,10 @@
   "framework": "vite",
   "crons": [
     {
+      "path": "/api/check-replies",
+      "schedule": "0 14 * * *"
+    },
+    {
       "path": "/api/send-reminders",
       "schedule": "0 18 * * *"
     }
