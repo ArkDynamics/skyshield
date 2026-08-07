@@ -677,14 +677,20 @@ function addMinutesISO(iso,mins){
   return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:00`;
 }
 function formatTimeLabel(iso){
-  const d=new Date(iso);
-  let h=d.getHours(),m=d.getMinutes();
+  if(!iso) return "";
+  // Handle both "2026-08-07T14:00:00" (local) and "2026-08-07T14:00:00.000Z" (UTC)
+  // Strip Z and milliseconds to always treat as local time
+  const local = iso.replace("Z","").replace(/\.\d+$/,"");
+  const d = new Date(local);
+  let h=d.getHours(), m=d.getMinutes();
   const ampm=h>=12?"PM":"AM";
   h=h%12; if(h===0) h=12;
   return `${h}:${pad2(m)} ${ampm}`;
 }
 function formatDateLabel(iso){
-  const d=new Date(iso);
+  if(!iso) return "";
+  const local = iso.replace("Z","").replace(/\.\d+$/,"");
+  const d = new Date(local);
   return d.toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
 }
 

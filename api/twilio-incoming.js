@@ -105,7 +105,31 @@ function buildSlots(roofer, existingInspections = []) {
     return ["mon","tue","wed","thu","fri"].includes(dayKey);
   }
 
-  // Build set of already-booked start times
+  const bufferMins = sched.bufferMins || 30;
+
+  // Build set of blocked time ranges (booked slot + buffer on each side)
+  const blockedRanges = existingInspections
+    .filter(i => i.status === "scheduled" || i.status === "rescheduled")
+    .map(i => {
+      const start = new Date(i.startISO || i.start_iso);
+      const end   = new Date(i.endISO   || i.end_iso   || i.startISO);
+      return {
+        start: new Date(start.getTime() - bufferMins * 60000),
+        end:   new Date(end.getTime()   + bufferMins * 60000),
+        inspectorId: i.inspectorId,
+      };
+    });
+
+  function isConflict(dateStr, hour) {
+    const slotStart = new Date(`${dateStr}T${String(hour).padStart(2,"0")}:00:00`);
+    const slotEnd   = new Date(slotStart.getTime() + dur * 60000);
+    return blockedRanges.some(r =>
+      (r.inspectorId === inspector.id || !r.inspectorId) &&
+      slotStart < r.end && slotEnd > r.start
+    );
+  }
+
+  // Build set of already-booked start times (for exact match check)
   const bookedTimes = new Set(
     existingInspections
       .filter(i => i.status === "scheduled" || i.status === "rescheduled")
@@ -157,8 +181,13 @@ function buildSlots(roofer, existingInspections = []) {
 
       if (bookedTimes.has(slotKey)) continue;
       if (isBlocked(dateStr, hour)) continue;
+      if (isConflict(dateStr, hour)) continue;
 
-      const endISO = new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
+      // Calculate endISO without timezone conversion issues
+      // Add duration minutes directly to the hour:minute without using Date math
+      const endHourRaw = hour + Math.floor(dur / 60);
+      const endMinRaw  = dur % 60;
+      const endISO = `${dateStr}T${String(endHourRaw).padStart(2,"0")}:${String(endMinRaw).padStart(2,"0")}:00`;
       const h12    = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
       const ampm   = hour >= 12 ? "pm" : "am";
       const period = hour < 12 ? "Morning" : hour < 15 ? "Midday" : "Afternoon";
