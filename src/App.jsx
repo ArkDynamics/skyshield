@@ -148,50 +148,25 @@ function trialExpired(roofer){
 // Step 2: skip_trace_batch (Tracerfy $0.04/hit) — async, uses webhook polling
 async function buildLeadsForZip(zip, tracerfyKey, onProgress){
   try{
-    onProgress?.(`Building lead list for ZIP ${zip}...`);
-
-    const buildRes = await fetch("/api/lead-builder",{
+    onProgress?.(`Pulling homeowner leads for ZIP ${zip} via Tracerfy...`);
+    const res = await fetch("/api/lead-builder",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"build_leads", tracerfyKey, zip}),
+      body:JSON.stringify({action:"build_leads", zip}),
     });
-
-    const text = await buildRes.text();
-    let buildData;
-    try{ buildData=JSON.parse(text); }
+    const text = await res.text();
+    let data;
+    try{ data=JSON.parse(text); }
     catch{
       console.error("lead-builder non-JSON:",text.slice(0,300));
-      return { error:`Lead builder API error (${buildRes.status}). Check Vercel function logs.`, leads:[] };
+      return { error:`Lead builder error (${res.status}). Check Vercel logs.`, leads:[] };
     }
-
-    if(!buildRes.ok||buildData.error){
-      return { error:buildData.error||`Lead builder failed (${buildRes.status})`, leads:[] };
+    if(!res.ok||data.error) return { error:data.error||`Lead builder failed (${res.status})`, leads:[] };
+    if(data.leads?.length){
+      onProgress?.(`✓ ${data.leads.length} leads for ZIP ${zip}`);
+      return { leads:data.leads };
     }
-
-    if(buildData.leads?.length){
-      onProgress?.(`✓ Got ${buildData.leads.length} leads for ZIP ${zip}`);
-      return { leads:buildData.leads };
-    }
-
-    if(buildData.jobId){
-      onProgress?.(`Processing ZIP ${zip} (est. ${buildData.estimatedSeconds||60}s)...`);
-      for(let i=0;i<30;i++){
-        await new Promise(r=>setTimeout(r,5000));
-        const pollRes=await fetch("/api/lead-builder",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"poll",tracerfyKey,jobId:buildData.jobId,zip})});
-        const pollText=await pollRes.text();
-        let pollData;
-        try{pollData=JSON.parse(pollText);}catch{continue;}
-        if(pollData.status==="complete"){
-          onProgress?.(`✓ Got ${pollData.leads?.length||0} leads for ZIP ${zip}`);
-          return { leads:pollData.leads||[] };
-        }
-        if(pollData.status==="failed") return { error:pollData.error||"Tracerfy job failed", leads:[] };
-        onProgress?.(`Processing ZIP ${zip} (${(i+1)*5}s elapsed)...`);
-      }
-      return { error:`Timed out waiting for ZIP ${zip} results`, leads:[] };
-    }
-
-    return { error:"Unexpected response from lead builder", leads:[] };
+    return { error: data.message||"No leads found for ZIP "+zip, leads:[] };
   }catch(e){
     return { error:e.message, leads:[] };
   }
@@ -6900,18 +6875,11 @@ function APISettings({apiKeys,onUpdate}){
       if(name==="weather"&&keys.weather){const r=await fetch(`https://api.weatherapi.com/v1/current.json?key=${keys.weather}&q=75023`);const d=await r.json();setTestResults(p=>({...p,[name]:d.error?"❌ "+d.error.message:"✓ Connected — "+d.location?.name}));}
       else if(name==="googleCal"&&keys.googleCalClientId){const t=await getGCalAccessToken({clientId:keys.googleCalClientId,clientSecret:keys.googleCalClientSecret,refreshToken:keys.googleCalRefreshToken});setTestResults(p=>({...p,[name]:t?"✓ Token refreshed successfully":"❌ Failed"}));}
       else if(name==="twilio"&&keys.twilioSid){const r=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${keys.twilioSid}.json`,{headers:{"Authorization":"Basic "+btoa(keys.twilioSid+":"+keys.twilioToken)}});const d=await r.json();setTestResults(p=>({...p,[name]:d.friendly_name?"✓ "+d.friendly_name:"❌ "+(d.message||"Invalid credentials")}));}
-      else if(name==="tracerfy"&&keys.tracerfy){
-        const r=await fetch("/api/lead-builder",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"diagnose",tracerfyKey:keys.tracerfy})});
+      else if(name==="tracerfy"){
+        const r=await fetch("/api/lead-builder",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"diagnose"})});
         const d=await r.json();
-        // Find first 200-status response to determine working endpoint + auth method
-        const working=Object.entries(d.results||{}).find(([k,v])=>v.status>=200&&v.status<300&&!v.error);
-        if(working){
-          setTestResults(p=>({...p,[name]:"✓ Connected via "+working[0]+": "+working[1].body.slice(0,80)}));
-        } else {
-          // Show the actual statuses so we can debug
-          const summary=Object.entries(d.results||{}).map(([k,v])=>`${k}: ${v.status||v.error}`).join(" | ");
-          setTestResults(p=>({...p,[name]:"❌ All endpoints failed. "+summary.slice(0,200)}));
-        }
+        if(d.success) setTestResults(p=>({...p,[name]:`✓ Tracerfy MCP connected. Tools: ${(d.tools||[]).join(", ")||"(see response)"}`}));
+        else setTestResults(p=>({...p,[name]:"❌ "+(d.error||"Could not connect to Tracerfy MCP")}));
       }
       else if(name==="stripe"&&keys.stripeSecret){const r=await fetch("https://api.stripe.com/v1/balance",{headers:{"Authorization":"Bearer "+keys.stripeSecret}});const d=await r.json();setTestResults(p=>({...p,[name]:d.object==="balance"?"✓ Connected":"❌ "+(d.error?.message||"Invalid key")}));}
       else if(name==="claude"){const r=await callClaude([{role:"user",content:"Reply with exactly: SkyShield connected"}]);setTestResults(p=>({...p,[name]:"✓ "+r.trim().slice(0,40)}));}
@@ -6923,11 +6891,11 @@ function APISettings({apiKeys,onUpdate}){
     {id:"weather",name:"WeatherAPI.com",desc:"Storm alert scanning",link:"https://www.weatherapi.com/",fields:[{k:"weather",label:"API Key"}]},
     {id:"twilio",name:"Twilio SMS",desc:"Account credentials (shared) + default fallback number",link:"https://www.twilio.com/",fields:[{k:"twilioSid",label:"Account SID"},{k:"twilioToken",label:"Auth Token",pw:true},{k:"twilioPhone",label:"Default From Number (fallback)"}]},
     {id:"googleCal",name:"Google Calendar",desc:"Inspection scheduling sync",link:"https://console.cloud.google.com/",fields:[{k:"googleCalClientId",label:"Client ID"},{k:"googleCalClientSecret",label:"Client Secret",pw:true},{k:"googleCalRefreshToken",label:"Refresh Token",pw:true}]},
-    {id:"tracerfy",name:"Tracerfy Skip Trace",desc:"Homeowner name, phone & email lookup — $0.04/lead",link:"https://www.tracerfy.com/",fields:[{k:"tracerfy",label:"API Key (Bearer Token)"}]},
+    {id:"tracerfy",name:"Tracerfy Skip Trace",desc:"Homeowner name, phone & email — $0.04/lead (via MCP)",link:"https://www.tracerfy.com/",fields:[]},
     {id:"stripe",name:"Stripe",desc:"Subscription billing",link:"https://dashboard.stripe.com/",fields:[{k:"stripePublishable",label:"Publishable Key"},{k:"stripeSecret",label:"Restricted Key",pw:true}]},
     {id:"claude",name:"Claude AI (Built-in)",desc:"Powers AI Agent & SMS generation",link:"https://console.anthropic.com/",fields:[]},
   ];
-  const configured=id=>{if(id==="twilio")return !!keys.twilioSid;if(id==="googleCal")return !!keys.googleCalClientId&&!!keys.googleCalRefreshToken;if(id==="stripe")return !!keys.stripeSecret;if(id==="claude")return true;if(id==="tracerfy")return !!keys.tracerfy;return !!keys[id];};
+  const configured=id=>{if(id==="twilio")return !!keys.twilioSid;if(id==="googleCal")return !!keys.googleCalClientId&&!!keys.googleCalRefreshToken;if(id==="stripe")return !!keys.stripeSecret;if(id==="claude")return true;if(id==="tracerfy")return true;return !!keys[id];};
 
   return <div>
     <div style={{...flex(0,"center","space-between"),marginBottom:20}}>
