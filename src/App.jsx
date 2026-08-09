@@ -166,7 +166,9 @@ async function buildLeadsForZip(zip, tracerfyKey, onProgress){
       onProgress?.(`✓ ${data.leads.length} leads for ZIP ${zip}`);
       return { leads:data.leads };
     }
-    return { error: data.message||"No leads found for ZIP "+zip, leads:[] };
+    // Return debug info so we can see what Tracerfy actually sent
+    const debugMsg = data.debug?.textSample ? `No leads parsed. Tracerfy said: "${data.debug.textSample.slice(0,200)}"` : (data.message||"No leads found for ZIP "+zip);
+    return { error: debugMsg, leads:[] };
   }catch(e){
     return { error:e.message, leads:[] };
   }

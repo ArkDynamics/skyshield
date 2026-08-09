@@ -62,58 +62,82 @@ export default async function handler(req, res) {
           mcp_servers: [{ type: "url", url: TRACERFY_MCP, name: "tracerfy" }],
           messages: [{
             role: "user",
-            content: `Use Tracerfy to find residential homeowner leads for ZIP code ${zip}.
-Pull as many homeowners as possible — I need their full name, phone number, and address.
-Return ONLY a JSON array with no other text, in this exact format:
-[{"homeowner":"Full Name","phone":"555-123-4567","address":"123 Main St","zip":"${zip}"},...]
-If there are no results return an empty array: []`,
+            content: `Use your Tracerfy tools to search for residential homeowner leads in ZIP code ${zip}. Get as many as possible with name, phone, and address. Return ONLY a raw JSON array like: [{"homeowner":"John Smith","phone":"555-123-4567","address":"123 Main St","zip":"${zip}"}]`,
           }],
         }),
       });
 
       const data = await r.json();
-      console.log("Tracerfy MCP response status:", r.status);
-      console.log("Content blocks:", data.content?.map(b => b.type).join(", "));
+      console.log("MCP status:", r.status);
+      console.log("Content types:", JSON.stringify((data.content||[]).map(b=>({type:b.type,name:b.name||undefined}))));
 
       if (!r.ok) {
         return res.status(500).json({ error: data.error?.message || "Anthropic API error", detail: data });
       }
 
-      // Extract text content
-      const textBlocks = (data.content || []).filter(b => b.type === "text");
-      const fullText = textBlocks.map(b => b.text).join("\n");
+      // Collect all content — text, tool results, MCP tool results
+      const allText = [];
+      const toolResults = [];
 
-      // Parse JSON array from response
-      const jsonMatch = fullText.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) {
-        console.log("No JSON array in response:", fullText.slice(0, 500));
-        // Maybe Tracerfy returned tool results directly
-        const toolResults = (data.content || []).filter(b => b.type === "tool_result" || b.type === "mcp_tool_result");
-        if (toolResults.length) {
-          return res.json({ success: true, zip, leads: [], raw: toolResults, message: "Got tool results but couldn't parse leads — check raw" });
+      for (const block of (data.content || [])) {
+        if (block.type === "text") {
+          allText.push(block.text);
         }
-        return res.json({ success: true, zip, leads: [], message: "No leads found for ZIP " + zip + ". Response: " + fullText.slice(0, 200) });
+        if (block.type === "tool_result" || block.type === "mcp_tool_result") {
+          const content = block.content;
+          if (Array.isArray(content)) {
+            for (const c of content) {
+              if (c.type === "text") toolResults.push(c.text);
+            }
+          } else if (typeof content === "string") {
+            toolResults.push(content);
+          }
+        }
       }
 
-      let leads = [];
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        leads = parsed.filter(l => l.phone && l.homeowner).map(l => ({
-          homeowner: l.homeowner || l.name || "Unknown",
-          phone: formatPhone(l.phone),
-          email: l.email || null,
-          address: l.address || "",
-          city: l.city || "",
-          state: l.state || "",
-          zip: l.zip || zip,
-        }));
-      } catch (e) {
-        console.error("JSON parse failed:", e.message);
-        return res.json({ success: false, zip, leads: [], error: "Could not parse Tracerfy results" });
+      const fullText = [...allText, ...toolResults].join("\n");
+      console.log("Full text (first 500):", fullText.slice(0, 500));
+
+      // Try to parse JSON array from anywhere in the response
+      const jsonMatch = fullText.match(/\[[\s\S]*?\]/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const leads = parsed
+              .filter(l => l.phone || l.homeowner || l.name)
+              .map(l => ({
+                homeowner: l.homeowner || l.name || l.owner || `${l.first_name||""} ${l.last_name||""}`.trim() || "Unknown",
+                phone: formatPhone(l.phone || l.phone_number || ""),
+                email: l.email || null,
+                address: l.address || l.street || "",
+                city: l.city || "",
+                state: l.state || "",
+                zip: l.zip || l.zip_code || zip,
+              }))
+              .filter(l => l.phone && l.homeowner !== "Unknown");
+
+            console.log(`✓ Parsed ${leads.length} leads from JSON`);
+            return res.json({ success: true, zip, leads, count: leads.length });
+          }
+        } catch (e) {
+          console.error("JSON parse error:", e.message);
+        }
       }
 
-      console.log(`✓ ZIP ${zip}: ${leads.length} leads from Tracerfy MCP`);
-      return res.json({ success: true, zip, leads, count: leads.length });
+      // No structured JSON — return raw so we can inspect what Tracerfy actually sent
+      console.log("No JSON array found. Full response:", fullText.slice(0, 1000));
+      return res.json({
+        success: false,
+        zip,
+        leads: [],
+        debug: {
+          contentTypes: (data.content||[]).map(b => b.type),
+          textSample: fullText.slice(0, 800),
+          stopReason: data.stop_reason,
+        },
+        error: "Tracerfy returned data but it couldn't be parsed. See debug field for raw response.",
+      });
 
     } catch (err) {
       console.error("build_leads error:", err);
