@@ -490,8 +490,9 @@ const DEFAULT_COMM = {
   activeHoursStart:"08:00", activeHoursEnd:"18:00",
   activeDays:["Mon","Tue","Wed","Thu","Fri"],
   followupDays:2, coldDays:5,
-  aiAutoReply:true, // when true, incoming lead SMS replies get a Claude-generated response
-  requireAdultPresent:true, // require AI to confirm an adult (18+) will be present before booking
+  aiAutoReply:true,
+  autoSendInitial:false, // when true, initial outreach SMS fires automatically when leads are created from a campaign
+  requireAdultPresent:true,
   templates:{
     initial:"Hi {{name}}, we noticed your area ({{zip}}) was recently hit by a {{storm}} storm. {{company}} offers FREE roof inspections — reply YES to schedule yours today!",
     followup:"Hi {{name}}, just following up on our inspection offer for your home in {{zip}}. We have openings this week — interested?",
@@ -1840,6 +1841,16 @@ function CommSettingsPanel({roofer,onSave}){
     <div style={card()}>
       <div style={{...T.head(14,600),marginBottom:6}}>AI Auto-Reply & Safety</div>
       <div style={{fontSize:12,color:C.textMuted,marginBottom:14,lineHeight:1.6}}>When enabled, incoming lead text replies are answered automatically by AI instead of waiting for you to respond manually.</div>
+
+      <div style={{...flex(10,"center","space-between"),padding:"10px 12px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:10}}>
+        <div>
+          <div style={{fontSize:13,fontWeight:600,color:C.text}}>Auto-Send Initial Outreach</div>
+          <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>Automatically send the Initial Outreach template to new leads the moment they're created from a storm campaign</div>
+        </div>
+        <button onClick={()=>setCfg(p=>({...p,autoSendInitial:!p.autoSendInitial}))} style={{width:40,height:22,borderRadius:11,border:"none",cursor:"pointer",background:cfg.autoSendInitial?C.green:C.border,position:"relative",flexShrink:0}}>
+          <div style={{width:18,height:18,borderRadius:"50%",background:"#fff",position:"absolute",top:2,left:cfg.autoSendInitial?20:2,transition:"left 0.15s"}}/>
+        </button>
+      </div>
 
       <div style={{...flex(10,"center","space-between"),padding:"10px 12px",background:C.surface,borderRadius:7,border:`1px solid ${C.border}`,marginBottom:10}}>
         <div>
@@ -4189,7 +4200,7 @@ function RooferDashboard({roofer,leads,jobs,estimates,invoices,apiKeys,onUpdate,
           {["all","pending","contacted","scheduled","won","cold"].map(f=><Btn key={f} small variant={leadFilter===f?"primary":"default"} onClick={()=>setLeadFilter(f)}>{f.charAt(0).toUpperCase()+f.slice(1)}</Btn>)}
         </div>
         <div style={flex(6)}>
-          {pending.length>0&&<Btn variant="info" small onClick={()=>pending.forEach(l=>smsLead(l))}>SMS All Pending ({pending.length})</Btn>}
+          {pending.length>0&&<Btn variant="primary" onClick={async()=>{if(!window.confirm(`Send initial outreach SMS to all ${pending.length} pending leads?`))return;let sent=0;for(const l of pending){await smsLead(l);sent++;}alert(`✓ ${sent} texts sent.`);}} style={{fontWeight:700}}>📤 Text All Pending ({pending.length})</Btn>}
           <Btn variant="default" small onClick={()=>exportToCSV(filteredLeads,[roofer],roofer.name+"-leads.csv")}>⬇ CSV</Btn>
           <Btn variant="primary" small onClick={()=>setShowAddLead(true)}>+ Add Lead</Btn>
         </div>
@@ -4603,17 +4614,35 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
       if(!result.leads.length){ return { skipped:"no_results" }; }
 
       let rooferIdx = 0;
+      const newLeads = [];
       result.leads.forEach(lead=>{
         const r = eligible[rooferIdx % eligible.length];
         rooferIdx++;
-        onUpdate("add_lead",{lead:{
+        const newLead = {
           id:"l"+Date.now()+Math.random(),
           homeowner:lead.homeowner, phone:lead.phone, email:lead.email||"",
           address:lead.address, zip:storm.zip, rooferId:r.id,
           stormType:storm.type, status:"pending", conversations:[],
           notes:stormNote, contactedAt:null, followupSent:false,
-        }});
+        };
+        onUpdate("add_lead",{lead:newLead});
+        newLeads.push({lead:newLead, roofer:r});
       });
+
+      // Auto-send initial SMS if enabled on the roofer's comm settings
+      for(const{lead,roofer:r} of newLeads){
+        const comm = r.commSettings||DEFAULT_COMM;
+        if(comm.autoSendInitial && apiKeys.twilio?.sid && lead.phone){
+          const msg = fillTemplate(comm.templates.initial,{
+            name:lead.homeowner.split(" ")[0],
+            zip:lead.zip, storm:storm.type,
+            company:r.name, date:"", time:"", inspector:"",
+          });
+          await sendTwilioSMS(apiKeys.twilio, lead.phone, msg, r.twilioFrom);
+          onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
+          onUpdate("lead_status",{leadId:lead.id,status:"contacted"});
+        }
+      }
 
       onUpdate("process_storm",{stormId:storm.id});
       await recordZipPull(storm.zip, result.leads.length, storm.type);
@@ -4942,13 +4971,30 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
               if(result.error){ alert("Lead builder error: "+result.error); setScanStatus(""); setManualZip(""); return; }
               if(!result.leads.length){ alert("No homeowner contacts found for ZIP "+zip+"."); setScanStatus(""); setManualZip(""); return; }
               let rooferIdx=0;
+              const newLeads=[];
               result.leads.forEach(lead=>{
                 const r=eligible[rooferIdx%eligible.length]; rooferIdx++;
-                onUpdate("add_lead",{lead:{id:"l"+Date.now()+Math.random(),homeowner:lead.homeowner,phone:lead.phone,email:lead.email||"",address:lead.address,zip,rooferId:r.id,stormType:"Manual",status:"pending",conversations:[],notes:stormNote,contactedAt:null,followupSent:false}});
+                const newLead={id:"l"+Date.now()+Math.random(),homeowner:lead.homeowner,phone:lead.phone,email:lead.email||"",address:lead.address,zip,rooferId:r.id,stormType:"Manual",status:"pending",conversations:[],notes:stormNote,contactedAt:null,followupSent:false};
+                onUpdate("add_lead",{lead:newLead});
+                newLeads.push({lead:newLead,roofer:r});
               });
               await recordZipPull(zip,result.leads.length,"Manual");
-              addActivity({type:"lead",message:`Manual campaign ZIP ${zip} — ${result.leads.length} real leads`,badge:`${result.leads.length} leads`,badgeColor:C.green});
-              alert(`✓ ${result.leads.length} homeowner leads created for ZIP ${zip}.`);
+
+              // Auto-send initial SMS if enabled
+              let autoSent=0;
+              for(const{lead,roofer:r} of newLeads){
+                const comm=r.commSettings||DEFAULT_COMM;
+                if(comm.autoSendInitial&&apiKeys.twilio?.sid&&lead.phone){
+                  const msg=fillTemplate(comm.templates.initial,{name:lead.homeowner.split(" ")[0],zip:lead.zip,storm:"storm",company:r.name,date:"",time:"",inspector:""});
+                  await sendTwilioSMS(apiKeys.twilio,lead.phone,msg,r.twilioFrom);
+                  onUpdate("add_conversation",{leadId:lead.id,entry:{role:"ai",msg,ts:new Date().toLocaleString()}});
+                  onUpdate("lead_status",{leadId:lead.id,status:"contacted"});
+                  autoSent++;
+                }
+              }
+
+              addActivity({type:"lead",message:`Manual campaign ZIP ${zip} — ${result.leads.length} leads${autoSent>0?`, ${autoSent} texted automatically`:""}`,badge:`${result.leads.length} leads`,badgeColor:C.green});
+              alert(`✓ ${result.leads.length} leads created for ZIP ${zip}.${autoSent>0?`\n${autoSent} initial texts sent automatically.`:"\nToggle Auto-Send in Comm Settings to text them automatically next time."}`);
               setScanStatus(""); setManualZip("");
             } else {
               alert("Tracerfy API key required.\n\nGo to API Settings → Tracerfy Skip Trace and add your API key.");
@@ -5125,7 +5171,7 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           <Select value={rooferFilter} onChange={setRooferFilter} options={[{value:"all",label:"All Roofers"},...roofers.map(r=>({value:r.id,label:r.name}))]} style={{width:170}}/>
         </div>
         <div style={flex(6)}>
-          {pending.length>0&&<Btn variant="info" small onClick={async()=>{for(const l of pending)await smsLead(l);}}>SMS All Pending ({pending.length})</Btn>}
+          {pending.length>0&&<Btn variant="primary" onClick={async()=>{if(!window.confirm(`Send initial outreach SMS to all ${pending.length} pending leads?`))return;let sent=0;for(const l of pending){await smsLead(l);sent++;}alert(`✓ ${sent} texts sent.`);}} style={{fontWeight:700}}>📤 Text All Pending ({pending.length})</Btn>}
           <Btn small onClick={()=>exportToCSV(filteredLeads,roofers,"all-leads.csv")}>⬇ CSV</Btn>
           {apiKeys.twilio?.sid&&<Btn variant="ghost" small onClick={fetchTwilioIncoming} disabled={fetchingTwilio}>{fetchingTwilio?"Fetching...":"⟳ Fetch Replies"}</Btn>}
           <Btn variant="primary" small onClick={()=>setShowAddLeadAdmin(true)}>+ Add Lead</Btn>
