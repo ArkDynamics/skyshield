@@ -148,52 +148,48 @@ function trialExpired(roofer){
 // Step 2: skip_trace_batch (Tracerfy $0.04/hit) — async, uses webhook polling
 async function buildLeadsForZip(zip, tracerfyKey, onProgress){
   try{
-    // Step 1 — get addresses for ZIP (free)
-    onProgress?.(`Fetching addresses for ZIP ${zip}...`);
-    const addrRes = await fetch("/api/lead-builder",{
+    onProgress?.(`Building lead list for ZIP ${zip}...`);
+
+    // Step 1 — kick off lead build (Tracerfy handles address lookup + skip trace)
+    const buildRes = await fetch("/api/lead-builder",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"get_addresses", zip}),
+      body:JSON.stringify({action:"build_leads", tracerfyKey, zip}),
     });
-    const addrData = await addrRes.json();
-    if(!addrData.success||!addrData.addresses?.length){
-      return { error: addrData.error||"No addresses found for ZIP "+zip, leads:[] };
-    }
-    onProgress?.(`Found ${addrData.addresses.length} addresses — submitting to skip trace...`);
+    const buildData = await buildRes.json();
 
-    // Step 2 — submit batch skip trace to Tracerfy
-    const batchRes = await fetch("/api/lead-builder",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"skip_trace_batch", tracerfyKey, zip, addresses:addrData.addresses}),
-    });
-    const batchData = await batchRes.json();
-    if(!batchData.success){
-      return { error: batchData.error||"Batch submission failed", leads:[] };
+    if(!buildRes.ok||buildData.error){
+      return { error: buildData.error||"Lead builder failed for ZIP "+zip, leads:[] };
     }
 
-    onProgress?.(`Skip trace job submitted (${batchData.count} records) — waiting for results...`);
+    // If we got leads back directly (small ZIP or sync response)
+    if(buildData.leads?.length){
+      onProgress?.(`✓ Got ${buildData.leads.length} leads`);
+      return { leads: buildData.leads };
+    }
 
-    // Step 3 — poll for results (Tracerfy is async, typically 30-120 seconds)
-    const jobId = batchData.jobId;
-    let attempts = 0;
-    const maxAttempts = 24; // 2 minutes max (24 × 5s)
-    while(attempts < maxAttempts){
-      await new Promise(r=>setTimeout(r,5000)); // wait 5 seconds between polls
-      attempts++;
-      const pollRes = await fetch("/api/lead-builder",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:"get_batch_results", tracerfyKey, jobId, zip}),
-      });
-      const pollData = await pollRes.json();
-      if(pollData.status==="complete"){
-        onProgress?.(`✓ Got ${pollData.leads?.length||0} leads with contact info`);
-        return { leads: pollData.leads||[], jobId };
+    // Async job — poll for results
+    if(buildData.jobId){
+      onProgress?.(`Processing ${zip} (job ${buildData.jobId})...`);
+      const maxAttempts = 24; // 2 min max
+      for(let i=0; i<maxAttempts; i++){
+        await new Promise(r=>setTimeout(r,5000));
+        const pollRes = await fetch("/api/lead-builder",{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({action:"poll", tracerfyKey, jobId:buildData.jobId, zip}),
+        });
+        const pollData = await pollRes.json();
+        if(pollData.status==="complete"){
+          onProgress?.(`✓ Got ${pollData.leads?.length||0} leads for ZIP ${zip}`);
+          return { leads: pollData.leads||[] };
+        }
+        onProgress?.(`Processing... (${(i+1)*5}s)`);
       }
-      onProgress?.(`Processing... (${attempts*5}s elapsed, ${pollData.progress||""})`);
+      return { error:`Timed out waiting for ZIP ${zip} results`, leads:[] };
     }
-    return { error:"Timed out waiting for skip trace results — check Tracerfy dashboard for job "+jobId, leads:[] };
+
+    return { error:"Unexpected response from lead builder", leads:[] };
   }catch(e){
     return { error:e.message, leads:[] };
   }
