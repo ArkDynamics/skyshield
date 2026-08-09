@@ -9,6 +9,44 @@ export default async function handler(req, res) {
 
   const { action, tracerfyKey, zip, jobId } = req.body || {};
 
+  // ── ACTION: diagnose Tracerfy connection ──────────────────────────────────
+  if (action === "diagnose") {
+    if (!tracerfyKey) return res.status(400).json({ error: "tracerfyKey required" });
+
+    const results = {};
+
+    const endpoints = [
+      { name: "api.tracerfy.com/v1/account",        url: "https://api.tracerfy.com/v1/account" },
+      { name: "api.tracerfy.com/v1/balance",         url: "https://api.tracerfy.com/v1/balance" },
+      { name: "api.tracerfy.com/v1/user",            url: "https://api.tracerfy.com/v1/user" },
+      { name: "www.tracerfy.com/api/v1/account/",    url: "https://www.tracerfy.com/api/v1/account/" },
+      { name: "www.tracerfy.com/api/v1/user/",       url: "https://www.tracerfy.com/api/v1/user/" },
+      { name: "www.tracerfy.com/api/v1/credit/",     url: "https://www.tracerfy.com/api/v1/credit/" },
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        // Try Bearer token
+        const r1 = await fetch(ep.url, {
+          headers: { "Authorization": `Bearer ${tracerfyKey}`, "Accept": "application/json" },
+        });
+        const t1 = await r1.text();
+        results[ep.name + " (Bearer)"] = { status: r1.status, body: t1.slice(0, 300) };
+
+        // Try Token prefix
+        const r2 = await fetch(ep.url, {
+          headers: { "Authorization": `Token ${tracerfyKey}`, "Accept": "application/json" },
+        });
+        const t2 = await r2.text();
+        results[ep.name + " (Token)"] = { status: r2.status, body: t2.slice(0, 300) };
+      } catch (err) {
+        results[ep.name] = { error: err.message };
+      }
+    }
+
+    return res.json({ diagnose: true, results });
+  }
+
   // ── ACTION: build leads ───────────────────────────────────────────────────
   if (action === "build_leads" || action === "get_addresses") {
     if (!tracerfyKey) return res.status(400).json({ error: "tracerfyKey required" });

@@ -6900,7 +6900,19 @@ function APISettings({apiKeys,onUpdate}){
       if(name==="weather"&&keys.weather){const r=await fetch(`https://api.weatherapi.com/v1/current.json?key=${keys.weather}&q=75023`);const d=await r.json();setTestResults(p=>({...p,[name]:d.error?"❌ "+d.error.message:"✓ Connected — "+d.location?.name}));}
       else if(name==="googleCal"&&keys.googleCalClientId){const t=await getGCalAccessToken({clientId:keys.googleCalClientId,clientSecret:keys.googleCalClientSecret,refreshToken:keys.googleCalRefreshToken});setTestResults(p=>({...p,[name]:t?"✓ Token refreshed successfully":"❌ Failed"}));}
       else if(name==="twilio"&&keys.twilioSid){const r=await fetch(`https://api.twilio.com/2010-04-01/Accounts/${keys.twilioSid}.json`,{headers:{"Authorization":"Basic "+btoa(keys.twilioSid+":"+keys.twilioToken)}});const d=await r.json();setTestResults(p=>({...p,[name]:d.friendly_name?"✓ "+d.friendly_name:"❌ "+(d.message||"Invalid credentials")}));}
-      else if(name==="tracerfy"&&keys.tracerfy){const r=await fetch("/api/lead-builder",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"build_leads",tracerfyKey:keys.tracerfy,zip:"73064"})});const d=await r.json();setTestResults(p=>({...p,[name]:d.success||d.jobId?"✓ Connected — Tracerfy API key valid":"❌ "+(d.error||"Check API key")}));}
+      else if(name==="tracerfy"&&keys.tracerfy){
+        const r=await fetch("/api/lead-builder",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"diagnose",tracerfyKey:keys.tracerfy})});
+        const d=await r.json();
+        // Find first 200-status response to determine working endpoint + auth method
+        const working=Object.entries(d.results||{}).find(([k,v])=>v.status>=200&&v.status<300&&!v.error);
+        if(working){
+          setTestResults(p=>({...p,[name]:"✓ Connected via "+working[0]+": "+working[1].body.slice(0,80)}));
+        } else {
+          // Show the actual statuses so we can debug
+          const summary=Object.entries(d.results||{}).map(([k,v])=>`${k}: ${v.status||v.error}`).join(" | ");
+          setTestResults(p=>({...p,[name]:"❌ All endpoints failed. "+summary.slice(0,200)}));
+        }
+      }
       else if(name==="stripe"&&keys.stripeSecret){const r=await fetch("https://api.stripe.com/v1/balance",{headers:{"Authorization":"Bearer "+keys.stripeSecret}});const d=await r.json();setTestResults(p=>({...p,[name]:d.object==="balance"?"✓ Connected":"❌ "+(d.error?.message||"Invalid key")}));}
       else if(name==="claude"){const r=await callClaude([{role:"user",content:"Reply with exactly: SkyShield connected"}]);setTestResults(p=>({...p,[name]:"✓ "+r.trim().slice(0,40)}));}
       else setTestResults(p=>({...p,[name]:"⚠ Enter key above and try again"}));
