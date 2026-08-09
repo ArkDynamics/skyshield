@@ -62,7 +62,9 @@ export default async function handler(req, res) {
           mcp_servers: [{ type: "url", url: TRACERFY_MCP, name: "tracerfy" }],
           messages: [{
             role: "user",
-            content: `Use your Tracerfy tools to search for residential homeowner leads in ZIP code ${zip}. Get as many as possible with name, phone, and address. Return ONLY a raw JSON array like: [{"homeowner":"John Smith","phone":"555-123-4567","address":"123 Main St","zip":"${zip}"}]`,
+            content: `Use your Tracerfy tools to find residential homeowner leads in ZIP code ${zip}. Limit to 25 results maximum to control costs. I need each person's full name, phone number, and street address. Return ONLY a raw JSON array, no other text:
+[{"homeowner":"Full Name","phone":"555-123-4567","address":"123 Main St","zip":"${zip}"}]
+If no results, return: []`,
           }],
         }),
       });

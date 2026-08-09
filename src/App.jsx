@@ -4940,15 +4940,24 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
           <Btn variant="info" onClick={async()=>{
             if(!manualZip.trim())return;
             const zip=manualZip.trim();
-            const tracerfyKey=apiKeys.tracerfy;
             const eligible=roofers.filter(r=>(r.status==="active"||r.status==="test")&&(r.territories.includes(zip)||(zipTerritories||[]).some(zt=>zt.account_id===r.id&&zt.zip_code===zip)));
             if(eligible.length===0){ alert("No active roofer covers ZIP "+zip); setManualZip(""); return; }
+
+            // Cost warning before pulling leads
+            const confirmed=window.confirm(
+              `⚠️ Cost Warning — ZIP ${zip}\n\n`+
+              `This will use Tracerfy credits to pull up to 25 homeowner leads.\n`+
+              `Estimated cost: ~$1.00 (25 leads × $0.04)\n\n`+
+              `Tracerfy processes large ZIPs in the background and will email you when done.\n\n`+
+              `Continue?`
+            );
+            if(!confirmed){ setManualZip(""); return; }
+
             const stormNote="Manual campaign — ZIP "+zip;
-            if(tracerfyKey){
-              setScanStatus(`Building lead list for ZIP ${zip}...`);
-              const result=await buildLeadsForZip(zip,tracerfyKey,msg=>setScanStatus(msg));
-              if(result.error){ alert("Lead builder error: "+result.error); setScanStatus(""); setManualZip(""); return; }
-              if(!result.leads.length){ alert("No homeowner contacts found for ZIP "+zip+"."); setScanStatus(""); setManualZip(""); return; }
+            setScanStatus(`Pulling leads for ZIP ${zip} via Tracerfy...`);
+            const result=await buildLeadsForZip(zip,null,msg=>setScanStatus(msg));
+            if(result.error){ alert("Lead builder error: "+result.error); setScanStatus(""); setManualZip(""); return; }
+            if(!result.leads.length){ alert("No homeowner contacts found for ZIP "+zip+". Tracerfy may be processing in background — check your email."); setScanStatus(""); setManualZip(""); return; }
               let rooferIdx=0;
               const newLeads=[];
               result.leads.forEach(lead=>{
@@ -4975,9 +4984,6 @@ function CommandCenter({roofers,leads,storms,apiKeys,onUpdate,onSelectRoofer,sca
               addActivity({type:"lead",message:`Manual campaign ZIP ${zip} — ${result.leads.length} leads${autoSent>0?`, ${autoSent} texted automatically`:""}`,badge:`${result.leads.length} leads`,badgeColor:C.green});
               alert(`✓ ${result.leads.length} leads created for ZIP ${zip}.${autoSent>0?`\n${autoSent} initial texts sent automatically.`:"\nToggle Auto-Send in Comm Settings to text them automatically next time."}`);
               setScanStatus(""); setManualZip("");
-            } else {
-              alert("Tracerfy API key required.\n\nGo to API Settings → Tracerfy Skip Trace and add your API key.");
-            }
           }}>+ Campaign</Btn>
         </div>
       </div>
