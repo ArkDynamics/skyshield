@@ -7000,6 +7000,277 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// ─── ANALYTICS DASHBOARD ─────────────────────────────────────────────────────
+function AnalyticsDashboard({roofers, leads, storms, zipLeadPulls, activities, apiKeys}){
+  const[period,setPeriod]=useState("all"); // all | 30 | 90
+
+  // Cost constants
+  const COST_LEAD_PULL    = 0.04; // Tracerfy Advanced Skip Trace per lead
+  const COST_SMS_SEGMENT  = 0.0079; // Twilio SMS per segment (~160 chars)
+  const COST_SMS_INBOUND  = 0.0079;
+
+  // Filter by period
+  const now = Date.now();
+  const periodMs = period==="30"?30*86400000:period==="90"?90*86400000:null;
+  function inPeriod(dateStr){ if(!periodMs||!dateStr) return true; return (now-new Date(dateStr).getTime())<periodMs; }
+
+  // ── LEAD PULL COSTS ──────────────────────────────────────────────────────────
+  const pullsInPeriod = (zipLeadPulls||[]).filter(p=>inPeriod(p.last_pulled_at));
+  const totalLeadsPulled = pullsInPeriod.reduce((s,p)=>s+(p.lead_count||0),0);
+  const leadPullCost = totalLeadsPulled * COST_LEAD_PULL;
+
+  // ── SMS COSTS ────────────────────────────────────────────────────────────────
+  // Count AI-sent messages from conversation history
+  const allConvos = leads.flatMap(l=>(l.conversations||[]).filter(c=>c.role==="ai"));
+  const smsInPeriod = allConvos.filter(c=>inPeriod(c.ts));
+  const totalSmsSent = smsInPeriod.length;
+  const smsCost = totalSmsSent * COST_SMS_SEGMENT;
+
+  // Inbound messages (lead replies)
+  const inboundConvos = leads.flatMap(l=>(l.conversations||[]).filter(c=>c.role==="lead"));
+  const inboundInPeriod = inboundConvos.filter(c=>inPeriod(c.ts));
+  const inboundCost = inboundInPeriod.length * COST_SMS_INBOUND;
+
+  // ── AI COSTS ─────────────────────────────────────────────────────────────────
+  // Claude Sonnet 4.6: ~$3/1M input, ~$15/1M output tokens
+  // Estimate: each AI reply is ~300 tokens output + ~500 input = ~$0.006/reply
+  const COST_AI_REPLY = 0.006;
+  const aiCost = totalSmsSent * COST_AI_REPLY;
+
+  // ── PLATFORM SUBSCRIPTION ────────────────────────────────────────────────────
+  const activeRoofers = roofers.filter(r=>r.status==="active");
+  const monthlyRevenue = activeRoofers.reduce((s,r)=>{
+    const p = {Base:275,Pro:2000,Growth:2750}[r.plan]||0;
+    return s+p;
+  },0);
+
+  // ── TOTALS ───────────────────────────────────────────────────────────────────
+  const totalVariableCost = leadPullCost + smsCost + inboundCost + aiCost;
+
+  // ── LEAD STATS ───────────────────────────────────────────────────────────────
+  const leadsInPeriod = leads.filter(l=>inPeriod(l.contactedAt||l.createdAt));
+  const contacted = leads.filter(l=>["contacted","scheduled","won"].includes(l.status));
+  const scheduled = leads.filter(l=>l.status==="scheduled");
+  const won       = leads.filter(l=>l.status==="won");
+  const contactRate = leads.length>0?Math.round(contacted.length/leads.length*100):0;
+  const bookRate    = contacted.length>0?Math.round(scheduled.length/contacted.length*100):0;
+
+  // ── ZIP BREAKDOWN ─────────────────────────────────────────────────────────────
+  const zipBreakdown = (zipLeadPulls||[])
+    .filter(p=>inPeriod(p.last_pulled_at))
+    .sort((a,b)=>(b.lead_count||0)-(a.lead_count||0))
+    .slice(0,10);
+
+  // ── ROOFER BREAKDOWN ─────────────────────────────────────────────────────────
+  const rooferStats = roofers.map(r=>{
+    const rLeads = leads.filter(l=>l.rooferId===r.id);
+    const rWon   = rLeads.filter(l=>l.status==="won");
+    const rSms   = rLeads.flatMap(l=>(l.conversations||[]).filter(c=>c.role==="ai")).length;
+    const rCost  = (rLeads.length*COST_LEAD_PULL)+(rSms*COST_SMS_SEGMENT)+(rSms*COST_AI_REPLY);
+    return { ...r, totalLeads:rLeads.length, wonLeads:rWon.length, smsSent:rSms, cost:rCost };
+  }).sort((a,b)=>b.totalLeads-a.totalLeads);
+
+  const periodLabel = period==="30"?"Last 30 Days":period==="90"?"Last 90 Days":"All Time";
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:16}}>
+      {/* Header */}
+      <div style={{...flex(0,"center","space-between"),flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={T.head(20,700)}>Cost Analytics</div>
+          <div style={{fontSize:12,color:C.textMuted,marginTop:2}}>Variable costs: Tracerfy + Twilio + Claude API</div>
+        </div>
+        <div style={{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+          {[["30","30 Days"],["90","90 Days"],["all","All Time"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setPeriod(v)} style={{
+              padding:"7px 16px",fontSize:12,fontWeight:600,border:"none",cursor:"pointer",
+              background:period===v?C.orange:"transparent",
+              color:period===v?"#000":C.textSub,
+            }}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Cost summary cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:12}}>
+        {[
+          {l:"Total Variable Cost",v:`$${totalVariableCost.toFixed(2)}`,c:C.red,sub:"This period"},
+          {l:"Lead Pull Cost",v:`$${leadPullCost.toFixed(2)}`,c:C.orange,sub:`${totalLeadsPulled.toLocaleString()} leads × $${COST_LEAD_PULL}`},
+          {l:"SMS Sent Cost",v:`$${smsCost.toFixed(2)}`,c:C.blue,sub:`${totalSmsSent.toLocaleString()} messages`},
+          {l:"SMS Inbound Cost",v:`$${inboundCost.toFixed(2)}`,c:C.purple,sub:`${inboundInPeriod.length.toLocaleString()} replies`},
+          {l:"AI Reply Cost",v:`$${aiCost.toFixed(2)}`,c:C.yellow,sub:`~$${COST_AI_REPLY}/reply`},
+          {l:"MRR",v:`$${monthlyRevenue.toLocaleString()}`,c:C.green,sub:`${activeRoofers.length} active roofers`},
+        ].map(s=>(
+          <div key={s.l} style={{...card(),padding:"14px 16px"}}>
+            <div style={{fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:6,lineHeight:1.4}}>{s.l}</div>
+            <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:22,fontWeight:700,color:s.c,marginBottom:2}}>{s.v}</div>
+            <div style={{fontSize:10,color:C.textMuted}}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Lead funnel */}
+      <div style={card()}>
+        <div style={{...T.head(13,600),marginBottom:14}}>Lead Funnel — {periodLabel}</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:10}}>
+          {[
+            {l:"Pulled",v:totalLeadsPulled,c:C.blue},
+            {l:"Contacted",v:contacted.length,c:C.orange},
+            {l:"Scheduled",v:scheduled.length,c:C.purple},
+            {l:"Won",v:won.length,c:C.green},
+            {l:"Contact Rate",v:`${contactRate}%`,c:C.yellow},
+            {l:"Book Rate",v:`${bookRate}%`,c:C.orange},
+          ].map(s=>(
+            <div key={s.l} style={{background:C.surface,borderRadius:8,padding:"10px 12px",border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:9,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:4}}>{s.l}</div>
+              <div style={{fontFamily:"'Space Grotesk',sans-serif",fontSize:20,fontWeight:700,color:s.c}}>{s.v}</div>
+            </div>
+          ))}
+        </div>
+        {/* Visual funnel bar */}
+        {totalLeadsPulled>0&&<div style={{marginTop:16}}>
+          {[
+            {l:"Pulled",n:totalLeadsPulled,c:C.blue},
+            {l:"Contacted",n:contacted.length,c:C.orange},
+            {l:"Scheduled",n:scheduled.length,c:C.purple},
+            {l:"Won",n:won.length,c:C.green},
+          ].map(s=>(
+            <div key={s.l} style={{marginBottom:8}}>
+              <div style={{...flex(0,"center","space-between"),marginBottom:3}}>
+                <span style={{fontSize:11,color:C.textSub}}>{s.l}</span>
+                <span style={{fontSize:11,fontWeight:600,color:s.c}}>{s.n} ({totalLeadsPulled>0?Math.round(s.n/totalLeadsPulled*100):0}%)</span>
+              </div>
+              <div style={{height:6,background:C.surface,borderRadius:3,overflow:"hidden"}}>
+                <div style={{height:"100%",width:`${totalLeadsPulled>0?Math.round(s.n/totalLeadsPulled*100):0}%`,
+                  background:s.c,borderRadius:3,transition:"width 0.5s ease"}}/>
+              </div>
+            </div>
+          ))}
+        </div>}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        {/* Cost per outcome */}
+        <div style={card()}>
+          <div style={{...T.head(13,600),marginBottom:14}}>Cost Per Outcome</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {[
+              {l:"Cost per lead pulled",v:totalLeadsPulled>0?`$${COST_LEAD_PULL.toFixed(2)}`:"—"},
+              {l:"Cost per lead contacted",v:contacted.length>0?`$${(totalVariableCost/contacted.length).toFixed(2)}`:"—"},
+              {l:"Cost per inspection booked",v:scheduled.length>0?`$${(totalVariableCost/scheduled.length).toFixed(2)}`:"—"},
+              {l:"Cost per job won",v:won.length>0?`$${(totalVariableCost/won.length).toFixed(2)}`:"—"},
+            ].map(r=>(
+              <div key={r.l} style={{...flex(0,"center","space-between"),padding:"9px 12px",
+                background:C.surface,borderRadius:7,border:`1px solid ${C.border}`}}>
+                <span style={{fontSize:12,color:C.textSub}}>{r.l}</span>
+                <span style={{fontSize:13,fontWeight:700,color:C.text}}>{r.v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* SMS breakdown */}
+        <div style={card()}>
+          <div style={{...T.head(13,600),marginBottom:14}}>SMS Breakdown</div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {[
+              {l:"Outbound (AI sent)",v:totalSmsSent,cost:`$${smsCost.toFixed(2)}`,c:C.blue},
+              {l:"Inbound (lead replies)",v:inboundInPeriod.length,cost:`$${inboundCost.toFixed(2)}`,c:C.purple},
+              {l:"AI generation cost",v:`${totalSmsSent} calls`,cost:`$${aiCost.toFixed(2)}`,c:C.yellow},
+            ].map(r=>(
+              <div key={r.l} style={{...flex(0,"center","space-between"),padding:"9px 12px",
+                background:C.surface,borderRadius:7,border:`1px solid ${C.border}`}}>
+                <div>
+                  <div style={{fontSize:12,color:C.textSub}}>{r.l}</div>
+                  <div style={{fontSize:11,fontWeight:600,color:r.c}}>{r.v}</div>
+                </div>
+                <span style={{fontSize:13,fontWeight:700,color:C.text}}>{r.cost}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ZIP cost breakdown */}
+      {zipBreakdown.length>0&&<div style={card()}>
+        <div style={{...T.head(13,600),marginBottom:12}}>Cost by ZIP Code</div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {["ZIP","Pulled","Pull Cost","SMS Est.","Total Est.","Last Pull"].map(h=>(
+                  <th key={h} style={{padding:"7px 10px",fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.06em",textAlign:"left"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {zipBreakdown.map(p=>{
+                const pullCost=(p.lead_count||0)*COST_LEAD_PULL;
+                const zipLeads=leads.filter(l=>l.zip===p.zip_code);
+                const zipSms=zipLeads.flatMap(l=>(l.conversations||[]).filter(c=>c.role==="ai")).length;
+                const smsCostZip=zipSms*COST_SMS_SEGMENT;
+                return(
+                  <tr key={p.zip_code} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"9px 10px",fontSize:13,fontWeight:700,color:C.orange}}>{p.zip_code}</td>
+                    <td style={{padding:"9px 10px",fontSize:13,color:C.text}}>{(p.lead_count||0).toLocaleString()}</td>
+                    <td style={{padding:"9px 10px",fontSize:13,color:C.red}}>${pullCost.toFixed(2)}</td>
+                    <td style={{padding:"9px 10px",fontSize:13,color:C.blue}}>${smsCostZip.toFixed(2)}</td>
+                    <td style={{padding:"9px 10px",fontSize:13,fontWeight:600,color:C.text}}>${(pullCost+smsCostZip).toFixed(2)}</td>
+                    <td style={{padding:"9px 10px",fontSize:12,color:C.textMuted}}>{new Date(p.last_pulled_at).toLocaleDateString()}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>}
+
+      {/* Roofer breakdown */}
+      {rooferStats.length>0&&<div style={card()}>
+        <div style={{...T.head(13,600),marginBottom:12}}>Cost by Roofer</div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                {["Roofer","Plan","Leads","Won","SMS Sent","Est. Variable Cost","ROI Signal"].map(h=>(
+                  <th key={h} style={{padding:"7px 10px",fontSize:10,fontWeight:600,color:C.textSub,textTransform:"uppercase",letterSpacing:"0.06em",textAlign:"left"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rooferStats.map(r=>{
+                const winRate=r.totalLeads>0?Math.round(r.wonLeads/r.totalLeads*100):0;
+                const roiColor=winRate>10?C.green:winRate>5?C.yellow:C.red;
+                return(
+                  <tr key={r.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                    <td style={{padding:"9px 10px",fontSize:13,fontWeight:700,color:C.text}}>{r.name}</td>
+                    <td style={{padding:"9px 10px"}}><Badge label={r.plan} color={PLAN_COLORS[r.plan]} small/></td>
+                    <td style={{padding:"9px 10px",fontSize:13,color:C.text}}>{r.totalLeads}</td>
+                    <td style={{padding:"9px 10px",fontSize:13,color:C.green,fontWeight:600}}>{r.wonLeads}</td>
+                    <td style={{padding:"9px 10px",fontSize:13,color:C.blue}}>{r.smsSent}</td>
+                    <td style={{padding:"9px 10px",fontSize:13,color:C.red,fontWeight:600}}>${r.cost.toFixed(2)}</td>
+                    <td style={{padding:"9px 10px"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:roiColor}}>{winRate}% win rate</div>
+                      <div style={{fontSize:10,color:C.textMuted}}>
+                        {r.wonLeads>0?`$${(r.cost/r.wonLeads).toFixed(2)}/win`:"No wins yet"}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>}
+
+      {/* Pricing disclaimer */}
+      <div style={{padding:"10px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`,fontSize:11,color:C.textMuted,lineHeight:1.6}}>
+        <strong style={{color:C.text}}>Cost estimates are approximate.</strong> Tracerfy: $0.04/lead (Advanced Skip Trace). Twilio SMS: ~$0.0079/segment outbound & inbound. Claude Sonnet 4.6: ~$0.006/AI reply. Actual bills may vary based on message length, carrier fees, and API usage. Check your Tracerfy, Twilio, and Anthropic dashboards for exact billing.
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   const[roofers,setRoofers]=useState([]);
   const[seats,setSeats]=useState([]);
@@ -7301,7 +7572,7 @@ export default function App(){
   function selectRoofer(roofer){setSelectedRoofer(roofer);setActiveSection("Roofer Dashboard");}
 
   // ── NAV CONFIG ────────────────────────────────────────────────────────────
-  const navSections=["Jobs","Command Center","Subscriptions & Billing","API Settings"];
+  const navSections=["Jobs","Command Center","Analytics","Subscriptions & Billing","API Settings"];
   const navStyle=(active)=>({border:"none",cursor:"pointer",padding:"6px 12px",borderRadius:6,fontSize:13,fontWeight:500,color:active?C.orange:C.textSub,background:active?C.orangeDim:"transparent"});
 
   // ── SHOW RESET PASSWORD SCREEN (from email link) ──────────────────────────
@@ -7482,9 +7753,11 @@ export default function App(){
             />
           :activeSection==="Command Center"
             ?<CommandCenter roofers={roofers} leads={leads} storms={storms} apiKeys={apiKeys} onUpdate={handleUpdate} onSelectRoofer={selectRoofer} scanSettings={scanSettings} onScanSettingsChange={setScanSettings} activities={activities} addActivity={addActivity} zipTerritories={zipTerritories} zipLeadPulls={zipLeadPulls} setZipLeadPulls={setZipLeadPulls}/>
-            :activeSection==="Subscriptions & Billing"
-              ?<Subscriptions roofers={roofers} seats={seats} zipTerritories={zipTerritories} onUpdate={handleUpdate}/>
-              :<APISettings apiKeys={apiKeys} onUpdate={handleUpdate}/>
+            :activeSection==="Analytics"
+              ?<AnalyticsDashboard roofers={roofers} leads={leads} storms={storms} zipLeadPulls={zipLeadPulls} activities={activities} apiKeys={apiKeys}/>
+              :activeSection==="Subscriptions & Billing"
+                ?<Subscriptions roofers={roofers} seats={seats} zipTerritories={zipTerritories} onUpdate={handleUpdate}/>
+                :<APISettings apiKeys={apiKeys} onUpdate={handleUpdate}/>
       }
     </main>
     <FloatingAIHelp role="admin" roofers={roofers} leads={leads} storms={storms} currentSection={activeSection}/>
