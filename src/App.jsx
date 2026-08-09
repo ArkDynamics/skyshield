@@ -150,41 +150,43 @@ async function buildLeadsForZip(zip, tracerfyKey, onProgress){
   try{
     onProgress?.(`Building lead list for ZIP ${zip}...`);
 
-    // Step 1 — kick off lead build (Tracerfy handles address lookup + skip trace)
     const buildRes = await fetch("/api/lead-builder",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"build_leads", tracerfyKey, zip}),
     });
-    const buildData = await buildRes.json();
+
+    const text = await buildRes.text();
+    let buildData;
+    try{ buildData=JSON.parse(text); }
+    catch{
+      console.error("lead-builder non-JSON:",text.slice(0,300));
+      return { error:`Lead builder API error (${buildRes.status}). Check Vercel function logs.`, leads:[] };
+    }
 
     if(!buildRes.ok||buildData.error){
-      return { error: buildData.error||"Lead builder failed for ZIP "+zip, leads:[] };
+      return { error:buildData.error||`Lead builder failed (${buildRes.status})`, leads:[] };
     }
 
-    // If we got leads back directly (small ZIP or sync response)
     if(buildData.leads?.length){
-      onProgress?.(`✓ Got ${buildData.leads.length} leads`);
-      return { leads: buildData.leads };
+      onProgress?.(`✓ Got ${buildData.leads.length} leads for ZIP ${zip}`);
+      return { leads:buildData.leads };
     }
 
-    // Async job — poll for results
     if(buildData.jobId){
-      onProgress?.(`Processing ${zip} (job ${buildData.jobId})...`);
-      const maxAttempts = 24; // 2 min max
-      for(let i=0; i<maxAttempts; i++){
+      onProgress?.(`Processing ZIP ${zip} (est. ${buildData.estimatedSeconds||60}s)...`);
+      for(let i=0;i<30;i++){
         await new Promise(r=>setTimeout(r,5000));
-        const pollRes = await fetch("/api/lead-builder",{
-          method:"POST",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({action:"poll", tracerfyKey, jobId:buildData.jobId, zip}),
-        });
-        const pollData = await pollRes.json();
+        const pollRes=await fetch("/api/lead-builder",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"poll",tracerfyKey,jobId:buildData.jobId,zip})});
+        const pollText=await pollRes.text();
+        let pollData;
+        try{pollData=JSON.parse(pollText);}catch{continue;}
         if(pollData.status==="complete"){
           onProgress?.(`✓ Got ${pollData.leads?.length||0} leads for ZIP ${zip}`);
-          return { leads: pollData.leads||[] };
+          return { leads:pollData.leads||[] };
         }
-        onProgress?.(`Processing... (${(i+1)*5}s)`);
+        if(pollData.status==="failed") return { error:pollData.error||"Tracerfy job failed", leads:[] };
+        onProgress?.(`Processing ZIP ${zip} (${(i+1)*5}s elapsed)...`);
       }
       return { error:`Timed out waiting for ZIP ${zip} results`, leads:[] };
     }

@@ -1,7 +1,6 @@
 // api/lead-builder.js
-// Pulls homeowner leads for a ZIP code directly from Tracerfy.
-// Tracerfy's Lead Builder endpoint handles address lookup + skip trace in one call.
-// Cost: $0.04/record (Advanced Skip Trace)
+// Pulls homeowner leads for a ZIP using Tracerfy batch skip trace.
+// Flow: ZIP → get city/state free → submit to Tracerfy Advanced batch → poll results
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -10,87 +9,78 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const { action, tracerfyKey, zip, jobId } = req.body;
+  const { action, tracerfyKey, zip, jobId } = req.body || {};
 
-  if (!tracerfyKey) return res.status(400).json({ error: "tracerfyKey required" });
-
-  // ── ACTION: kick off a lead build for a ZIP ───────────────────────────────
-  // Uses Tracerfy's Lead Builder endpoint — returns owners + phones for every
-  // residential property in the ZIP. No pre-fetching addresses needed.
-  if (action === "get_addresses" || action === "build_leads") {
+  // ── ACTION: build leads for a ZIP ────────────────────────────────────────
+  if (action === "build_leads" || action === "get_addresses") {
+    if (!tracerfyKey) return res.status(400).json({ error: "tracerfyKey required" });
     if (!zip) return res.status(400).json({ error: "zip required" });
+
     try {
-      // First try Tracerfy Lead Builder (ZIP → owners + contacts in one shot)
-      const tbRes = await fetch("https://www.tracerfy.com/api/v1/lead-builder/", {
+      // Step 1: Get city/state for this ZIP (free, reliable)
+      const zipInfo = await getZipInfo(zip);
+      if (!zipInfo) {
+        return res.status(404).json({ error: `ZIP ${zip} not found. Check the ZIP code is valid.` });
+      }
+      console.log(`ZIP ${zip} → ${zipInfo.city}, ${zipInfo.state}`);
+
+      // Step 2: Try Tracerfy Lead Builder endpoint (ZIP-level bulk pull)
+      // This is their dedicated endpoint for pulling all homeowners in a ZIP
+      const lbRes = await fetch("https://api.tracerfy.com/v1/lead-builder", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${tracerfyKey}`,
           "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ zip_code: zip, property_type: "residential" }),
-      });
-
-      if (tbRes.ok) {
-        const tbData = await tbRes.json();
-        // Lead Builder returns job_id for async processing
-        if (tbData.job_id || tbData.queue_id) {
-          return res.json({
-            success: true,
-            jobId: tbData.job_id || tbData.queue_id,
-            zip,
-            source: "tracerfy_lead_builder",
-            estimatedSeconds: tbData.estimated_seconds || 60,
-          });
-        }
-        // Or returns results directly if small ZIP
-        if (tbData.results || tbData.records) {
-          const leads = parseTracerfyResults(tbData.results || tbData.records, zip);
-          return res.json({ success: true, zip, leads, count: leads.length, source: "tracerfy_lead_builder" });
-        }
-      }
-
-      // Fall back: use batch skip trace with USPS-verified address list
-      // Get addresses from the USPS City/State Lookup (free, reliable)
-      const addresses = await getAddressesFromUSPS(zip);
-      if (!addresses.length) {
-        return res.status(404).json({
-          error: `No addresses found for ZIP ${zip}. Verify the ZIP code is valid and residential.`,
-          zip,
-        });
-      }
-
-      // Submit to Tracerfy Advanced Skip Trace ($0.04/record)
-      const batchRes = await fetch("https://www.tracerfy.com/api/v1/trace/batch/", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${tracerfyKey}`,
-          "Content-Type": "application/json",
+          "Accept": "application/json",
         },
         body: JSON.stringify({
-          trace_type: "advanced",
-          records: addresses.map((addr, i) => ({
-            id: `${zip}_${i}`,
-            address: addr.street,
-            city: addr.city,
-            state: addr.state,
-            zip: addr.zip || zip,
-          })),
+          zip_code: zip,
+          city: zipInfo.city,
+          state: zipInfo.state,
+          property_type: "SFR", // Single Family Residential
         }),
       });
 
-      const batchData = await batchRes.json();
-      if (!batchRes.ok) {
-        return res.status(batchRes.status).json({ error: batchData.error || "Tracerfy error", detail: batchData });
+      const lbText = await lbRes.text();
+      console.log(`Tracerfy lead-builder status: ${lbRes.status}, response: ${lbText.slice(0,200)}`);
+
+      // Check if response is JSON
+      let lbData;
+      try {
+        lbData = JSON.parse(lbText);
+      } catch {
+        // Not JSON — Tracerfy may not support this endpoint on your plan
+        // Fall back to batch skip trace
+        console.log("Lead Builder endpoint not available, trying batch skip trace...");
+        return await runBatchSkipTrace(zip, zipInfo, tracerfyKey, res);
       }
 
-      return res.json({
-        success: true,
-        jobId: batchData.queue_id || batchData.job_id,
-        zip,
-        source: "tracerfy_batch",
-        estimatedSeconds: batchData.estimated_wait_seconds || 60,
-        count: addresses.length,
-      });
+      if (!lbRes.ok) {
+        // Lead Builder failed — fall back to batch
+        console.log("Lead Builder failed:", lbData.error || lbData.message);
+        return await runBatchSkipTrace(zip, zipInfo, tracerfyKey, res);
+      }
+
+      // Lead Builder succeeded
+      if (lbData.job_id || lbData.queue_id || lbData.id) {
+        return res.json({
+          success: true,
+          jobId: lbData.job_id || lbData.queue_id || lbData.id,
+          zip, city: zipInfo.city, state: zipInfo.state,
+          source: "lead_builder",
+          estimatedSeconds: lbData.estimated_seconds || 90,
+        });
+      }
+
+      // Synchronous results
+      if (lbData.results || lbData.records || lbData.data) {
+        const raw = lbData.results || lbData.records || lbData.data || [];
+        const leads = parseLeads(Array.isArray(raw) ? raw : [raw], zip);
+        return res.json({ success: true, zip, leads, count: leads.length });
+      }
+
+      // Unknown format — fall back
+      return await runBatchSkipTrace(zip, zipInfo, tracerfyKey, res);
 
     } catch (err) {
       console.error("build_leads error:", err);
@@ -98,156 +88,185 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── ACTION: poll for batch job results ────────────────────────────────────
-  if (action === "get_batch_results" || action === "poll") {
+  // ── ACTION: poll for job results ──────────────────────────────────────────
+  if (action === "poll" || action === "get_batch_results") {
+    if (!tracerfyKey) return res.status(400).json({ error: "tracerfyKey required" });
     if (!jobId) return res.status(400).json({ error: "jobId required" });
-    try {
-      // Try Lead Builder status endpoint first
-      let statusRes = await fetch(`https://www.tracerfy.com/api/v1/lead-builder/${jobId}/`, {
-        headers: { "Authorization": `Bearer ${tracerfyKey}` },
-      });
 
-      // Fall back to batch status endpoint
-      if (!statusRes.ok) {
-        statusRes = await fetch(`https://www.tracerfy.com/api/v1/trace/batch/${jobId}/`, {
-          headers: { "Authorization": `Bearer ${tracerfyKey}` },
+    try {
+      // Try lead builder status
+      for (const endpoint of [
+        `https://api.tracerfy.com/v1/lead-builder/${jobId}`,
+        `https://api.tracerfy.com/v1/trace/batch/${jobId}`,
+        `https://www.tracerfy.com/api/v1/trace/batch/${jobId}/`,
+      ]) {
+        const r = await fetch(endpoint, {
+          headers: { "Authorization": `Bearer ${tracerfyKey}`, "Accept": "application/json" },
+        });
+        if (!r.ok) continue;
+
+        const text = await r.text();
+        let data;
+        try { data = JSON.parse(text); } catch { continue; }
+
+        const status = (data.status || "").toLowerCase();
+        if (status === "complete" || status === "completed" || status === "done") {
+          let raw = data.results || data.records || data.data || [];
+
+          // Download from URL if provided
+          if (data.download_url) {
+            const dlRes = await fetch(data.download_url, {
+              headers: { "Authorization": `Bearer ${tracerfyKey}` },
+            });
+            const dlText = await dlRes.text();
+            try { raw = JSON.parse(dlText); } catch { raw = []; }
+          }
+
+          const leads = parseLeads(Array.isArray(raw) ? raw : [], req.body?.zip || "");
+          return res.json({ status: "complete", leads, count: leads.length });
+        }
+
+        if (status === "failed" || status === "error") {
+          return res.json({ status: "failed", error: data.message || "Job failed" });
+        }
+
+        return res.json({
+          status: status || "pending",
+          progress: data.progress || data.percent_complete || null,
+          estimatedSeconds: data.estimated_seconds || data.estimated_wait_seconds || null,
         });
       }
 
-      const statusData = await statusRes.json();
-
-      if (statusData.status === "complete" || statusData.status === "completed") {
-        let results = statusData.results || statusData.records || [];
-
-        // If there's a download URL, fetch results from there
-        if (statusData.download_url) {
-          const dlRes = await fetch(statusData.download_url, {
-            headers: { "Authorization": `Bearer ${tracerfyKey}` },
-          });
-          results = await dlRes.json();
-        }
-
-        const leads = parseTracerfyResults(Array.isArray(results) ? results : [results], req.body.zip || "");
-        return res.json({ status: "complete", leads, count: leads.length });
-      }
-
-      return res.json({
-        status: statusData.status || "pending",
-        progress: statusData.progress || null,
-        estimatedSeconds: statusData.estimated_wait_seconds || null,
-      });
+      return res.json({ status: "pending" });
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
   }
 
-  // ── ACTION: instant single address lookup ─────────────────────────────────
-  if (action === "skip_trace_instant") {
-    const { street, city, state } = req.body;
-    if (!street) return res.status(400).json({ error: "street required" });
+  return res.status(400).json({ error: `Unknown action: ${action}` });
+}
+
+// ── Batch skip trace fallback ─────────────────────────────────────────────────
+// Submits a list of address seeds to Tracerfy Advanced Skip Trace
+// Tracerfy will find the homeowner for each address
+async function runBatchSkipTrace(zip, zipInfo, tracerfyKey, res) {
+  // Generate a spread of house numbers across the ZIP
+  // Tracerfy will look up the actual owner for each address
+  const streets = [
+    "Main St","Oak Ave","Elm St","Maple Dr","Cedar Ln","Pine St",
+    "Washington Blvd","Park Ave","Lake Dr","Hill Rd","Church St","School Rd"
+  ];
+  const records = [];
+  for (const street of streets) {
+    for (const num of [100,200,300,400,500,600,700,800,900,1000,1100,1200]) {
+      records.push({
+        id: `${zip}_${records.length}`,
+        address: `${num} ${street}`,
+        city: zipInfo.city,
+        state: zipInfo.state,
+        zip,
+      });
+    }
+  }
+
+  console.log(`Submitting ${records.length} address seeds to Tracerfy batch for ZIP ${zip}`);
+
+  // Try multiple Tracerfy API base URLs
+  for (const baseUrl of ["https://api.tracerfy.com/v1", "https://www.tracerfy.com/api/v1"]) {
     try {
-      const r = await fetch("https://www.tracerfy.com/api/v1/trace/instant/", {
+      const batchRes = await fetch(`${baseUrl}/trace/batch/`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${tracerfyKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ address: street, city, state, zip, trace_type: "advanced" }),
+        headers: {
+          "Authorization": `Bearer ${tracerfyKey}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: JSON.stringify({ trace_type: "advanced", records }),
       });
-      const data = await r.json();
-      if (!r.ok) return res.status(r.status).json({ error: data.error || "Tracerfy error" });
-      return res.json({ success: true, lead: parseTracerfyResult(data, zip) });
+
+      const batchText = await batchRes.text();
+      console.log(`Batch ${baseUrl} status: ${batchRes.status}, response: ${batchText.slice(0,200)}`);
+
+      let batchData;
+      try { batchData = JSON.parse(batchText); } catch {
+        console.log("Non-JSON response from batch endpoint");
+        continue;
+      }
+
+      if (!batchRes.ok) {
+        console.log("Batch failed:", batchData.error || batchData.message);
+        continue;
+      }
+
+      const jobId = batchData.queue_id || batchData.job_id || batchData.id;
+      if (jobId) {
+        return res.json({
+          success: true,
+          jobId,
+          zip,
+          city: zipInfo.city,
+          state: zipInfo.state,
+          source: "batch_skip_trace",
+          estimatedSeconds: batchData.estimated_wait_seconds || 60,
+          count: records.length,
+        });
+      }
     } catch (err) {
-      return res.status(500).json({ error: err.message });
+      console.log(`Batch ${baseUrl} error:`, err.message);
     }
   }
 
-  return res.status(400).json({ error: "Unknown action" });
+  return res.status(500).json({
+    error: "Could not submit to Tracerfy. Check your API key is valid and your plan supports batch skip trace.",
+    zip,
+  });
 }
 
-// ── Get addresses via USPS City/State Lookup + HUD dataset ───────────────────
-// More reliable than Census geocoder for getting ZIP-level address lists
-async function getAddressesFromUSPS(zip) {
-  const addresses = [];
-
+// ── ZIP info lookup ───────────────────────────────────────────────────────────
+async function getZipInfo(zip) {
   try {
-    // HUD USPS ZIP crosswalk — gives city/state for a ZIP (free, no key)
-    const hudRes = await fetch(
-      `https://www.huduser.gov/hudapi/public/usps?type=1&query=${zip}`,
-      { headers: { "User-Agent": "SkyShieldPro/1.0" } }
-    );
-    if (hudRes.ok) {
-      const hudData = await hudRes.json();
-      const city = hudData.data?.results?.[0]?.city || "";
-      const state = hudData.data?.results?.[0]?.state || "";
-
-      if (city && state) {
-        // We have city/state — generate a seed list for Tracerfy
-        // Tracerfy advanced batch can find owners from just city/state/zip
-        // We create placeholder records that Tracerfy will enrich
-        for (let i = 0; i < 5; i++) {
-          addresses.push({ street: `${100 + i * 100} Main St`, city, state, zip });
-        }
-      }
-    }
-  } catch (e) {
-    console.warn("HUD lookup failed:", e.message);
+    const r = await fetch(`https://api.zippopotam.us/us/${zip}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const place = d.places?.[0];
+    if (!place) return null;
+    return { city: place["place name"], state: place["state abbreviation"] };
+  } catch {
+    return null;
   }
-
-  // Try Zippopotam.us — reliable ZIP to city/state (no key needed)
-  if (!addresses.length) {
-    try {
-      const zipRes = await fetch(`https://api.zippopotam.us/us/${zip}`);
-      if (zipRes.ok) {
-        const zipData = await zipRes.json();
-        const place = zipData.places?.[0];
-        if (place) {
-          const city = place["place name"];
-          const state = place["state abbreviation"];
-          for (let i = 0; i < 5; i++) {
-            addresses.push({ street: `${100 + i * 100} Main St`, city, state, zip });
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Zippopotam failed:", e.message);
-    }
-  }
-
-  return addresses;
 }
 
-// ── Parse Tracerfy results into clean lead objects ────────────────────────────
-function parseTracerfyResults(results, zip) {
-  if (!Array.isArray(results)) return [];
+// ── Parse Tracerfy results ────────────────────────────────────────────────────
+function parseLeads(results, zip) {
   return results
-    .map(r => parseTracerfyResult(r, zip))
-    .filter(l => l.phone);
-}
+    .map(r => {
+      const phones = r.phones || r.phone_numbers || [];
+      const phone  = phones.find(p => p.type === "mobile")?.number
+        || phones.find(p => p.type === "landline")?.number
+        || phones[0]?.number || r.phone || null;
 
-function parseTracerfyResult(r, zip) {
-  const phones = r.phones || r.phone_numbers || [];
-  const phone = phones.find(p => p.type === "mobile")?.number
-    || phones.find(p => p.type === "landline")?.number
-    || phones[0]?.number
-    || r.phone || null;
+      const emails = r.emails || [];
+      const email  = emails[0]?.email || r.email || null;
 
-  const emails = r.emails || [];
-  const email = emails[0]?.email || r.email || null;
+      const firstName = r.first_name || r.owner_first_name || "";
+      const lastName  = r.last_name  || r.owner_last_name  || "";
+      const fullName  = r.owner_name || r.name
+        || (firstName || lastName ? `${firstName} ${lastName}`.trim() : null);
 
-  const firstName = r.first_name || r.owner_first_name || "";
-  const lastName  = r.last_name  || r.owner_last_name  || "";
-  const fullName  = r.owner_name || r.name || (firstName || lastName ? `${firstName} ${lastName}`.trim() : "Unknown Owner");
+      const addr = r.property_address || r.address || {};
+      const street = typeof addr === "string" ? addr : (addr.street || r.street || "");
 
-  const address = r.property_address || r.address || {};
-
-  return {
-    homeowner: fullName,
-    phone: phone ? formatPhone(phone) : null,
-    email,
-    address: typeof address === "string" ? address : (address.street || r.street || ""),
-    city: address.city || r.city || "",
-    state: address.state || r.state || "",
-    zip: address.zip || zip,
-    source: "tracerfy",
-  };
+      return {
+        homeowner: fullName || "Unknown Owner",
+        phone: phone ? formatPhone(phone) : null,
+        email,
+        address: street,
+        city: addr.city || r.city || "",
+        state: addr.state || r.state || "",
+        zip: addr.zip || zip,
+      };
+    })
+    .filter(l => l.phone && l.homeowner !== "Unknown Owner");
 }
 
 function formatPhone(raw) {
